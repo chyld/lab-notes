@@ -2,7 +2,7 @@ import { join, resolve } from "node:path";
 import { buildApp } from "./app.ts";
 
 // Empty values count as unset.
-const port = Number(process.env.PORT || 3000);
+const port = Number(process.env.PORT || 5555);
 const dataDir = process.env.DATA_DIR || "./data";
 
 if (!Number.isInteger(port) || port < 1 || port > 65535) {

@@ -14,5 +14,5 @@ COPY server ./server
 COPY --from=build /app/dist/web ./dist/web
 RUN mkdir /data && chown node:node /data
 USER node
-EXPOSE 3000
+EXPOSE 5555
 CMD ["node", "server/index.ts"]

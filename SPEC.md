@@ -92,7 +92,7 @@ Node runs `server/*.ts` directly; it ignores `tsconfig` and only erases types. S
 
 `vite.config.ts`: `root: "web"`, `build.outDir: "../dist/web"` (relative to `root`), and
 `build.emptyOutDir: true` (needed because the output is outside `root`). Dev server proxies
-`/api` to `http://localhost:${process.env.PORT ?? 3000}`.
+`/api` to `http://localhost:${process.env.PORT || 5555}`.
 
 ## Data model
 
@@ -263,7 +263,7 @@ heading, and the 22px logo in the top bar's back link.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `PORT` | `3000` | Port the server listens on (bound to `0.0.0.0`). In dev, the Vite proxy targets it too. |
+| `PORT` | `5555` | Port the server listens on (bound to `0.0.0.0`). In dev, the Vite proxy targets it too. |
 | `DATA_DIR` | `./data` | Directory holding `notes.db` |
 
 Empty values count as unset. A `PORT` that is not an integer from 1 to 65535 exits at startup with
@@ -272,7 +272,7 @@ one clear error line.
 **Logging:** Fastify's logger is on (startup, errors), but per-request logging is disabled, so the
 container's logs don't grow with every request.
 
-Under Compose, `PORT` is the **host** port only; the container always listens on 3000.
+Under Compose, `PORT` is the **host** port only; the container always listens on 5555.
 
 ## Docker
 
@@ -284,7 +284,7 @@ Under Compose, `PORT` is the **host** port only; the container always listens on
    `package.json` + `package-lock.json`; `npm ci --omit=dev && npm cache clean --force`;
    `COPY server ./server` (`.dockerignore` excludes `server/**/*.test.ts`);
    `COPY --from=build /app/dist/web ./dist/web`; `mkdir /data && chown node:node /data`;
-   `USER node`; `EXPOSE 3000`; `CMD ["node", "server/index.ts"]` (exec form, so Node is PID 1 and
+   `USER node`; `EXPOSE 5555`; `CMD ["node", "server/index.ts"]` (exec form, so Node is PID 1 and
    receives signals).
 
 **Shutdown:** on `SIGTERM`/`SIGINT`, `index.ts` awaits `app.close()` (whose `onClose` hook closes
@@ -300,7 +300,7 @@ services:
   app:
     build: .
     ports:
-      - "${PORT:-3000}:3000"
+      - "${PORT:-5555}:5555"
     volumes:
       - data:/data
     restart: unless-stopped
@@ -328,7 +328,7 @@ they never touch `./data`.
 
 ## Acceptance criteria
 
-1. `docker compose up -d --build` starts the app on `http://<host>:3000`.
+1. `docker compose up -d --build` starts the app on `http://<host>:5555`.
 2. The list shows "No notes yet" on a fresh install.
 3. "New note" → type text → Save creates a note; the URL becomes `/notes/<id>` and the editor keeps
    its content and cursor. A second Save updates the same note (no duplicate).

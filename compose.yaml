@@ -4,7 +4,7 @@ services:
   app:
     build: .
     ports:
-      - "${PORT:-3000}:3000"
+      - "${PORT:-5555}:5555"
     volumes:
       - data:/data
     restart: unless-stopped
