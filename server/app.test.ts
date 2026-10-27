@@ -49,12 +49,13 @@ test("creates, reads, and updates a note", async () => {
   assert.equal(updated.createdAt, created.createdAt);
 });
 
-test("lists id, title, and tags, most recently saved first", async () => {
+test("lists id, title, tags, and updatedAt, most recently saved first", async () => {
   const a = await create("older");
   await new Promise((r) => setTimeout(r, 5));
   const b = await create("newer");
   let list = (await app.inject({ method: "GET", url: "/api/notes" })).json();
-  assert.deepEqual(Object.keys(list[0]).sort(), ["id", "tags", "title"]);
+  assert.deepEqual(Object.keys(list[0]).sort(), ["id", "tags", "title", "updatedAt"]);
+  assert.equal(list[0].updatedAt, b.updatedAt);
   assert.equal(list[0].id, b.id);
 
   await new Promise((r) => setTimeout(r, 5));
@@ -357,14 +358,15 @@ test("migrates a database created before tags", async () => {
   const migrated = buildApp({ dbPath: path });
   try {
     const list = (await migrated.inject({ method: "GET", url: "/api/notes" })).json();
-    assert.deepEqual(list, [{ id: "old-1", title: "Old note", tags: [] }]);
+    assert.deepEqual(list, [{ id: "old-1", title: "Old note", tags: [], updatedAt: "2026-01-01T00:00:00.000Z" }]);
     const put = await migrated.inject({ method: "PUT", url: "/api/notes/old-1", payload: { content: doc("Old note"), tags: ["kept"] } });
     assert.deepEqual(put.json().tags, ["kept"]);
     await migrated.close();
     // Opening the migrated file again (column already there) is a no-op, not a failed ALTER.
     const reopened = buildApp({ dbPath: path });
     const again = (await reopened.inject({ method: "GET", url: "/api/notes" })).json();
-    assert.deepEqual(again, [{ id: "old-1", title: "Old note", tags: ["kept"] }]);
+    assert.equal(again.length, 1);
+    assert.deepEqual(again[0].tags, ["kept"]);
     await reopened.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

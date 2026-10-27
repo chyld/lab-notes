@@ -86,6 +86,25 @@ export function ShowNotesButton() {
   );
 }
 
+const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+const dayFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+const dayYearFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
+const fullFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "short" });
+
+/**
+ * When a note was last saved, in the browser's locale and time zone: "Edited today, 3:42 PM",
+ * "Edited yesterday, 9:10 AM", "Edited Oct 12, 3:42 PM" (this year), "Edited Oct 12, 2025".
+ */
+function editedLabel(iso: string, now: Date): string {
+  const date = new Date(iso);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  if (date >= today) return `Edited today, ${timeFormat.format(date)}`;
+  if (date >= yesterday) return `Edited yesterday, ${timeFormat.format(date)}`;
+  if (date.getFullYear() === now.getFullYear()) return `Edited ${dayFormat.format(date)}, ${timeFormat.format(date)}`;
+  return `Edited ${dayYearFormat.format(date)}`;
+}
+
 type State =
   | { status: "loading" }
   | { status: "error"; message: string }
@@ -127,6 +146,7 @@ export function Sidebar({ currentId, refresh }: Props) {
   const closeIfNarrow = () => narrow && close();
   const toggleFilter = (tag: string) => setFilter((current) => (current === tag ? null : tag));
   const notes = state.status === "ready" ? state.notes : [];
+  const now = new Date(); // "today"/"yesterday" are judged at render (every refetch re-renders)
   // The open note is always listed, even without the tag, so you can always see where you are
   // (e.g. a new, untagged note you just saved while filtering).
   const shown = filter ? notes.filter((note) => note.tags.includes(filter) || note.id === currentId) : notes;
@@ -226,7 +246,10 @@ export function Sidebar({ currentId, refresh }: Props) {
                   aria-current={note.id === currentId ? "page" : undefined}
                   onClick={closeIfNarrow}
                 >
-                  {note.title}
+                  <span className="sidebar-note-title">{note.title}</span>
+                  <time className="sidebar-note-edited" dateTime={note.updatedAt} title={fullFormat.format(new Date(note.updatedAt))}>
+                    {editedLabel(note.updatedAt, now)}
+                  </time>
                 </Link>
                 {/* Beside the link, not inside it: no buttons inside a link. */}
                 {note.tags.length > 0 && (

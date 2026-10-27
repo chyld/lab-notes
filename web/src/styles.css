@@ -170,6 +170,24 @@ button:disabled {
   white-space: nowrap;
 }
 
+.sidebar-note-title,
+.sidebar-note-edited {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-note-edited {
+  color: #5f6368;
+  font-size: 12px;
+}
+
+.sidebar-notes a[aria-current="page"] .sidebar-note-edited {
+  color: #0b57d0;
+  font-weight: 400;
+}
+
 .sidebar-notes a:hover {
   background: #e9eef6;
 }

@@ -119,7 +119,12 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
   });
 
   app.get("/api/notes", async () =>
-    db.listNotes().map((row) => ({ id: row.id, title: row.title, tags: JSON.parse(row.tags) as string[] })),
+    db.listNotes().map((row) => ({
+      id: row.id,
+      title: row.title,
+      tags: JSON.parse(row.tags) as string[],
+      updatedAt: row.updated_at,
+    })),
   );
 
   app.get<{ Params: IdParams }>("/api/notes/:id", { schema: { params: idParams } }, async (request, reply) => {

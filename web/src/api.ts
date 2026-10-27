@@ -1,6 +1,6 @@
 import type { JSONContent } from "@tiptap/react";
 
-export type NoteSummary = { id: string; title: string; tags: string[] };
+export type NoteSummary = { id: string; title: string; tags: string[]; updatedAt: string };
 
 export type Note = {
   id: string;

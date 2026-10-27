@@ -12,7 +12,7 @@ export type NoteRow = {
   tags: string;
 };
 
-export type NoteListRow = Pick<NoteRow, "id" | "title" | "tags">;
+export type NoteListRow = Pick<NoteRow, "id" | "title" | "tags" | "updated_at">;
 
 export type ImageRow = {
   id: string;
@@ -52,7 +52,7 @@ export function openDb(path: string) {
   }
 
   // rowid breaks ties between saves in the same millisecond (latest insert first).
-  const list = db.prepare("SELECT id, title, tags FROM notes ORDER BY updated_at DESC, rowid DESC");
+  const list = db.prepare("SELECT id, title, tags, updated_at FROM notes ORDER BY updated_at DESC, rowid DESC");
   const get = db.prepare("SELECT * FROM notes WHERE id = ?");
   const insert = db.prepare(
     "INSERT INTO notes (id, title, content, created_at, updated_at, tags) VALUES (?, ?, ?, ?, ?, ?)",
