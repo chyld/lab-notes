@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import { Minus, Plus } from "lucide-react";
-import { textStyleAt } from "./editor.ts";
+import { setTextStyle, textStyleAt } from "./editor.ts";
 import { Tool } from "./ToolButton.tsx";
 
 const MIN_PT = 1;
@@ -27,8 +27,21 @@ export function sizeAtSelection(editor: Editor): number | null {
     if (points !== null) return points;
   }
   try {
-    const { node } = editor.view.domAtPos(editor.state.selection.from);
-    const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
+    const { state, view } = editor;
+    const { selection } = state;
+    // At a cursor, measure the text before it (what typing continues); for a range, its start.
+    const side = selection.empty ? -1 : 1;
+    const { node, offset } = view.domAtPos(selection.from, side);
+    let target: Node | null = node;
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      target = node.childNodes[side < 0 ? offset - 1 : offset] ?? node;
+    }
+    let el = target?.nodeType === Node.TEXT_NODE ? target.parentElement : (target as Element | null);
+    // After Clear formatting the cursor may still sit in an old sized span, but typing won't use it:
+    // measure the block instead.
+    if (selection.empty && state.storedMarks !== null) {
+      el = el?.closest("p, h1, h2, h3, h4, h5, h6, pre") ?? el;
+    }
     if (!el) return null;
     const px = parseFloat(getComputedStyle(el).fontSize);
     return Number.isFinite(px) ? Math.round(px * 0.75) : null;
@@ -53,7 +66,7 @@ export function FontSizeControl({ editor, size, disabled }: Props) {
   function apply(points: number, refocus: boolean) {
     const clamped = Math.min(MAX_PT, Math.max(MIN_PT, Math.round(points)));
     const chain = refocus ? editor.chain().focus() : editor.chain();
-    chain.setFontSize(`${clamped}pt`).run();
+    setTextStyle(editor, chain, { fontSize: `${clamped}pt` }).run();
   }
 
   /** The typed size if it's a plain whole number, else null. Clears the draft either way. */

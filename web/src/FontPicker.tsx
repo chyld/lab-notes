@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/react";
+import { setTextStyle } from "./editor.ts";
 import { ChevronDown } from "lucide-react";
 import {
   CATEGORIES,
@@ -140,7 +141,9 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
   function apply(font: CatalogFont | null) {
     if (font) {
       loadFont(font[0]);
-      editor.chain().focus().setFontFamily(fontStack(font[0], font[1])).run();
+      setTextStyle(editor, editor.chain().focus(), { fontFamily: fontStack(font[0], font[1]) }).run();
+    } else if (editor.state.selection.empty) {
+      setTextStyle(editor, editor.chain().focus(), { fontFamily: null }).run();
     } else {
       editor.chain().focus().unsetFontFamily().run();
     }
