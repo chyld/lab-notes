@@ -51,7 +51,9 @@ async function send<T>(path: string, init: RequestInit): Promise<T> {
 
 const notePath = (id: string) => `/api/notes/${encodeURIComponent(id)}`;
 
-export const listNotes = () => request<NoteSummary[]>("GET", "/api/notes");
+/** Every note, or with `q` only those matching it (words in the text, `#tag` prefixes). */
+export const listNotes = (q = "") =>
+  request<NoteSummary[]>("GET", q.trim() ? `/api/notes?q=${encodeURIComponent(q)}` : "/api/notes");
 export const getNote = (id: string) => request<Note>("GET", notePath(id));
 export const createNote = (content: JSONContent, tags: string[]) =>
   request<Note>("POST", "/api/notes", { content, tags });

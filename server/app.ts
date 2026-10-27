@@ -3,9 +3,10 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import Fastify, { LogController, type FastifyError, type FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
-import { openDb, type NoteRow } from "./db.ts";
+import { openDb, type NoteListRow, type NoteRow } from "./db.ts";
 import { detectImageType, IMAGE_CONTENT_TYPES, MAX_IMAGE_BYTES } from "./images.ts";
-import { extractTitle } from "./title.ts";
+import { isEmptyQuery, matchesQuery, parseQuery } from "./search.ts";
+import { extractText, extractTitle } from "./title.ts";
 
 export type AppOptions = {
   dbPath: string;
@@ -36,6 +37,11 @@ const docBody = {
       },
     },
   },
+} as const;
+
+const listQuery = {
+  type: "object",
+  properties: { q: { type: "string", maxLength: 500 } },
 } as const;
 
 const idParams = {
@@ -118,14 +124,24 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
     return reply.code(404).send({ error: "Not found" });
   });
 
-  app.get("/api/notes", async () =>
-    db.listNotes().map((row) => ({
-      id: row.id,
-      title: row.title,
-      tags: JSON.parse(row.tags) as string[],
-      updatedAt: row.updated_at,
-    })),
-  );
+  const toSummary = (row: NoteListRow) => ({
+    id: row.id,
+    title: row.title,
+    tags: JSON.parse(row.tags) as string[],
+    updatedAt: row.updated_at,
+  });
+
+  // ?q= searches (see SPEC "Search"); blank or absent lists every note.
+  app.get<{ Querystring: { q?: string } }>("/api/notes", { schema: { querystring: listQuery } }, async (request) => {
+    const query = parseQuery(request.query.q ?? "");
+    if (isEmptyQuery(query)) return db.listNotes().map(toSummary);
+    // Only word searches need every note's text; tag-only searches use the plain list.
+    const rows = query.words.length > 0 ? db.searchableNotes() : db.listNotes().map((row) => ({ ...row, body: "" }));
+    return rows
+      .map((row) => ({ row, tags: JSON.parse(row.tags) as string[] }))
+      .filter(({ row, tags }) => matchesQuery({ body: row.body, tags }, query))
+      .map(({ row }) => toSummary(row));
+  });
 
   app.get<{ Params: IdParams }>("/api/notes/:id", { schema: { params: idParams } }, async (request, reply) => {
     const row = db.getNote(request.params.id);
@@ -143,6 +159,7 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
       created_at: now,
       updated_at: now,
       tags: JSON.stringify(request.body.tags ?? []),
+      body: extractText(request.body.content),
     };
     db.insertNote(row);
     return reply.code(201).send(toNote(row));
@@ -156,7 +173,14 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
       const content = request.body.content;
       if (exceedsMaxDepth(content)) return reply.code(400).send(tooDeep);
       const tags = request.body.tags === undefined ? null : JSON.stringify(request.body.tags);
-      const updated = db.updateNote(id, extractTitle(content), JSON.stringify(content), tags, new Date().toISOString());
+      const updated = db.updateNote(
+        id,
+        extractTitle(content),
+        JSON.stringify(content),
+        extractText(content),
+        tags,
+        new Date().toISOString(),
+      );
       if (!updated) return reply.code(404).send({ error: "Note not found" });
       return toNote(db.getNote(id)!);
     },

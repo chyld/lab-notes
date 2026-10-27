@@ -372,3 +372,76 @@ test("migrates a database created before tags", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+const richDoc = (...lines: string[]) => ({
+  type: "doc",
+  content: lines.map((line) => ({ type: "paragraph", content: [{ type: "text", text: line }] })),
+});
+
+test("searches the full text and tags", async () => {
+  const fresh = buildApp({ dbPath: ":memory:" });
+  try {
+    const make = async (lines: string[], tags: string[]) =>
+      (await fresh.inject({ method: "POST", url: "/api/notes", payload: { content: richDoc(...lines), tags } })).json();
+    const proxmox = await make(["Proxmox setup", "Install the ZFS pool on Été disks"], ["homelab", "storage"]);
+    const network = await make(["Network plan", "VLANs for the homelab"], ["homelab", "network"]);
+    const groceries = await make(["Groceries", "100% juice_box"], []);
+    const untitled = await make(["", "only a body line"], []);
+    const ids = async (q: string) =>
+      (await fresh.inject({ method: "GET", url: `/api/notes?q=${encodeURIComponent(q)}` })).json().map((n: { id: string }) => n.id);
+
+    assert.deepEqual(await ids("zfs"), [proxmox.id]); // body, case-insensitive
+    assert.deepEqual(await ids("prox"), [proxmox.id]); // substring of the title
+    assert.deepEqual(await ids("été"), [proxmox.id]); // non-ASCII case folding
+    assert.deepEqual(await ids("homelab"), [network.id]); // words search text, not tags
+    assert.deepEqual(await ids("#home"), [network.id, proxmox.id]); // tag prefix, list order
+    assert.deepEqual(await ids("#homelab #net"), [network.id]); // every token must match
+    assert.deepEqual(await ids("#home vlans"), [network.id]);
+    assert.deepEqual(await ids("pool missing"), []);
+    assert.deepEqual(await ids("100%"), [groceries.id]); // no LIKE wildcards
+    assert.deepEqual(await ids("juice_box"), [groceries.id]);
+    assert.deepEqual(await ids("#HomeLab"), [network.id, proxmox.id]); // tag prefix normalized
+    assert.equal((await ids("   ")).length, 4); // blank lists everything
+    assert.equal((await ids("#")).length, 4); // bare # is ignored
+    assert.equal((await ids("#!!")).length, 4); // empty after cleaning: ignored
+    assert.deepEqual(await ids("untitled"), []); // the placeholder title isn't searchable text
+    assert.deepEqual(await ids("body line"), [untitled.id]);
+    assert.deepEqual(await ids("e\u0301te\u0301"), [proxmox.id]); // NFD query, NFC text
+
+    // Saving updates what's searchable.
+    await fresh.inject({ method: "PUT", url: `/api/notes/${groceries.id}`, payload: { content: richDoc("Groceries", "zfs cables") } });
+    assert.deepEqual((await ids("zfs")).sort(), [groceries.id, proxmox.id].sort());
+
+    const tooLong = await fresh.inject({ method: "GET", url: `/api/notes?q=${"a".repeat(501)}` });
+    assert.equal(tooLong.statusCode, 400);
+    // The list never includes the body.
+    const list = (await fresh.inject({ method: "GET", url: "/api/notes?q=zfs" })).json();
+    assert.equal("body" in list[0], false);
+  } finally {
+    await fresh.close();
+  }
+});
+
+test("backfills the search text of notes saved before search existed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "labnotes-body-"));
+  const path = join(dir, "notes.db");
+  const old = new DatabaseSync(path);
+  old.exec(`CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, tags TEXT NOT NULL DEFAULT '[]')`);
+  const insert = old.prepare("INSERT INTO notes VALUES (?, ?, ?, ?, ?, ?)");
+  insert.run("n1", "Old", JSON.stringify(richDoc("Old", "kubernetes cluster")), "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", "[]");
+  insert.run("n2", "Broken", "{not json", "2026-01-02T00:00:00.000Z", "2026-01-02T00:00:00.000Z", "[]");
+  old.close();
+  try {
+    const app1 = buildApp({ dbPath: path });
+    const found = (await app1.inject({ method: "GET", url: "/api/notes?q=kubernetes" })).json();
+    assert.deepEqual(found.map((n: { id: string }) => n.id), ["n1"]);
+    await app1.close();
+    // Reopening doesn't redo or break anything.
+    const app2 = buildApp({ dbPath: path });
+    assert.equal((await app2.inject({ method: "GET", url: "/api/notes?q=cluster" })).json().length, 1);
+    await app2.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

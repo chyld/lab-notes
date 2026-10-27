@@ -128,13 +128,33 @@ button:disabled {
   outline-offset: 2px;
 }
 
-.sidebar-filter {
+.sidebar-search {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem 0;
+  gap: 0.375rem;
+  margin: 0.5rem 0.75rem 0.25rem;
+  padding: 0 0.6rem;
+  border: 1px solid #c4c7c5;
+  border-radius: 999px;
+  background: #fff;
   color: #5f6368;
-  font-size: 13px;
+}
+
+.sidebar-search:focus-within {
+  border-color: #0b57d0;
+  outline: 1px solid #0b57d0;
+}
+
+.sidebar-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #1f1f1f;
+  font: inherit;
+  font-size: 14px;
 }
 
 .sidebar-tags {

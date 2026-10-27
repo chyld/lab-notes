@@ -44,3 +44,37 @@ export function extractTitle(doc: unknown): string {
   const title = block ? firstLineText(block).replace(/\s+/g, " ").trim() : "";
   return title || "Untitled";
 }
+
+// Marks the end of a textblock on the walk stack, so a newline follows its text.
+const BLOCK_END = Symbol("block end");
+
+/**
+ * The note's plain text, for search: every text node in document order, a newline after each
+ * textblock and for each hard break (so words in different lines never run together). Images and
+ * rules add nothing. Never throws.
+ */
+export function extractText(doc: unknown): string {
+  if (!isNode(doc)) return "";
+  const parts: string[] = [];
+  const stack: unknown[] = children(doc).toReversed();
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === BLOCK_END) {
+      parts.push("\n");
+      continue;
+    }
+    if (!isNode(node)) continue;
+    if (node.type === "text" && typeof node.text === "string") {
+      parts.push(node.text);
+      continue;
+    }
+    if (node.type === "hardBreak") {
+      parts.push("\n");
+      continue;
+    }
+    if (typeof node.type === "string" && TEXTBLOCKS.has(node.type)) stack.push(BLOCK_END);
+    const kids = children(node);
+    for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+  }
+  return parts.join("");
+}

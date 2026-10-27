@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { PanelLeftClose, PanelLeftOpen, Plus, X } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, Plus, Search } from "lucide-react";
 import { errorMessage, listNotes, type NoteSummary } from "./api.ts";
+import { normalizeTag } from "./tags.ts";
 
 const STORAGE_KEY = "lab-notes:sidebar";
 const NARROW = "(max-width: 816px)";
@@ -120,8 +121,11 @@ type Props = {
 export function Sidebar({ currentId, refresh }: Props) {
   const sidebar = useContext(SidebarContext)!;
   const [state, setState] = useState<State>({ status: "loading" });
-  // The tag the list is filtered to. The sidebar never remounts, so this survives note switches.
-  const [filter, setFilter] = useState<string | null>(null);
+  // The search box. The sidebar never remounts, so this survives note switches.
+  const [query, setQuery] = useState("");
+  // Ids of the notes matching the query; null when the box is blank (or before the first answer).
+  const [results, setResults] = useState<Set<string> | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -140,18 +144,54 @@ export function Sidebar({ currentId, refresh }: Props) {
     // currentId: switching notes refetches too, so a failed first load is retried.
   }, [refresh, currentId]);
 
+  // Search 200ms after the last keystroke, and again whenever the list refreshes. A superseded
+  // request is cancelled; while one is in flight (or if it fails) the previous results stay.
+  useEffect(() => {
+    if (!query.trim()) {
+      setResults(null);
+      setSearchError(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      listNotes(query).then(
+        (notes) => {
+          if (cancelled) return;
+          setResults(new Set(notes.map((note) => note.id)));
+          setSearchError(null);
+        },
+        (err: unknown) => {
+          // Keep the previous results, but say they're not for this search.
+          if (!cancelled) setSearchError(errorMessage(err));
+        },
+      );
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query, refresh, currentId]);
+
   const { narrow, open, setOpen } = sidebar;
   const close = () => setOpen(false);
   // On narrow screens the overlay gets out of the way once you navigate.
   const closeIfNarrow = () => narrow && close();
-  const toggleFilter = (tag: string) => setFilter((current) => (current === tag ? null : tag));
+  const tokens = query.split(/\s+/).filter(Boolean);
+  // A token as the search reads it: "#Home" and "#home" are the same tag.
+  const tokenKey = (token: string) => (token.startsWith("#") ? `#${normalizeTag(token.slice(1))}` : token);
+  const hasTag = (tag: string) => tokens.some((token) => tokenKey(token) === `#${tag}`);
+  // A tag chip adds its #tag to the search, or removes it (every spelling of it) if it's there.
+  const toggleTag = (tag: string) =>
+    setQuery(
+      (hasTag(tag) ? tokens.filter((token) => tokenKey(token) !== `#${tag}`) : [...tokens, `#${tag}`]).join(" "),
+    );
   const notes = state.status === "ready" ? state.notes : [];
   const now = new Date(); // "today"/"yesterday" are judged at render (every refetch re-renders)
-  // The open note is always listed, even without the tag, so you can always see where you are
-  // (e.g. a new, untagged note you just saved while filtering).
-  const shown = filter ? notes.filter((note) => note.tags.includes(filter) || note.id === currentId) : notes;
-  // "No notes tagged #x" is about the tag, so it shows even while the open note is listed anyway.
-  const noneTagged = filter !== null && !notes.some((note) => note.tags.includes(filter));
+  // The open note is always listed, even if it doesn't match, so you can always see where you are
+  // (e.g. a new note you just saved while searching).
+  const shown = results ? notes.filter((note) => results.has(note.id) || note.id === currentId) : notes;
+  // "No notes match" is about the search, so it shows even while the open note is listed anyway.
+  const noMatches = results !== null && results.size === 0;
 
   // The narrow overlay closes on Esc wherever focus is (clicking its empty area drops focus to
   // <body>), like a dialog, and hands focus back to Show notes.
@@ -203,27 +243,29 @@ export function Sidebar({ currentId, refresh }: Props) {
           <Plus size={16} aria-hidden />
           New note
         </Link>
-        {filter && (
-          <div className="sidebar-filter">
-            Tagged
-            <span className="tag-chip active">
-              #{filter}
-              <button
-                type="button"
-                className="tag-remove"
-                aria-label="Clear tag filter"
-                title="Clear tag filter"
-                onClick={() => {
-                  setFilter(null);
-                  // The filter bar (and this button) goes away; keep focus in the sidebar.
-                  document.querySelector<HTMLElement>(".sidebar-new")?.focus();
-                }}
-              >
-                <X size={12} aria-hidden />
-              </button>
-            </span>
-          </div>
-        )}
+        <div className="sidebar-search">
+          <Search size={16} aria-hidden />
+          <input
+            type="search"
+            aria-label="Search notes"
+            placeholder="Search, or #tag"
+            spellCheck={false}
+            autoCapitalize="off"
+            autoComplete="off"
+            maxLength={500}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              // Esc clears a non-empty search (here, not left to the browser) and must not also
+              // close the narrow overlay; an empty box lets it through.
+              if (event.key === "Escape" && query && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                event.stopPropagation();
+                setQuery("");
+              }
+            }}
+          />
+        </div>
         {state.status === "loading" && <p className="sidebar-status muted">Loading…</p>}
         {state.status === "error" && (
           <p className="sidebar-status error" role="alert">
@@ -231,9 +273,14 @@ export function Sidebar({ currentId, refresh }: Props) {
           </p>
         )}
         {state.status === "ready" && notes.length === 0 && <p className="sidebar-status muted">No notes yet</p>}
-        {state.status === "ready" && notes.length > 0 && noneTagged && (
+        {searchError && (
+          <p className="sidebar-status error" role="alert">
+            Couldn't search: {searchError}
+          </p>
+        )}
+        {state.status === "ready" && notes.length > 0 && noMatches && (
           <p className="sidebar-status muted" role="status">
-            No notes tagged #{filter}
+            No notes match
           </p>
         )}
         {shown.length > 0 && (
@@ -258,10 +305,10 @@ export function Sidebar({ currentId, refresh }: Props) {
                       <button
                         key={tag}
                         type="button"
-                        className={tag === filter ? "tag-chip active" : "tag-chip"}
-                        aria-pressed={tag === filter}
-                        title={`Show notes tagged ${tag}`}
-                        onClick={() => toggleFilter(tag)}
+                        className={hasTag(tag) ? "tag-chip active" : "tag-chip"}
+                        aria-pressed={hasTag(tag)}
+                        title={`Search for #${tag}`}
+                        onClick={() => toggleTag(tag)}
                       >
                         #{tag}
                       </button>

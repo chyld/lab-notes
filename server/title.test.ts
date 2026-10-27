@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractTitle } from "./title.ts";
+import { extractText, extractTitle } from "./title.ts";
 
 const text = (t: string) => ({ type: "text", text: t });
 const p = (...content: object[]) => ({ type: "paragraph", content });
@@ -80,4 +80,25 @@ test("skips a leading image", () => {
     ],
   };
   assert.equal(extractTitle(doc), "Caption line");
+});
+
+test("extractText: every line's text, one per line, hard breaks as newlines", () => {
+  const doc = {
+    type: "doc",
+    content: [
+      { type: "heading", content: [{ type: "text", text: "Title" }] },
+      { type: "paragraph", content: [{ type: "text", text: "one" }, { type: "hardBreak" }, { type: "text", text: "two" }] },
+      { type: "image", attrs: { src: "/api/images/x" } },
+      { type: "bulletList", content: [{ type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "item" }] }] }] },
+      { type: "codeBlock", content: [{ type: "text", text: "a\nb" }] },
+      { type: "paragraph" },
+    ],
+  };
+  assert.equal(extractText(doc), "Title\none\ntwo\nitem\na\nb\n\n");
+});
+
+test("extractText never throws on malformed input", () => {
+  for (const bad of [null, 1, "x", { content: "nope" }, { content: [null, 1, { text: 5 }] }]) {
+    assert.equal(typeof extractText(bad), "string");
+  }
 });
