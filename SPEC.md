@@ -29,8 +29,10 @@ In scope, and nothing else:
     [Tags](#tags).
 12. **Search** (added by user request): one search box in the sidebar; words search the full text
     of every note, `#tag` filters by tag (prefix). See [Search](#search).
+13. **Unsaved-changes warning** (added by user request): leaving a note with unsaved changes asks
+    first. See [Unsaved changes](#unsaved-changes).
 
-Out of scope (the user will decide later): delete, autosave, unsaved-changes warnings, keyboard
+Out of scope (the user will decide later): delete, autosave, keyboard
 save shortcut, folders, sharing, auth, real-time collaboration,
 version history, note previews in the sidebar, text color, an image button or file picker,
 image drag-and-drop from outside the browser, image captions/alignment/cropping/alt text, and
@@ -692,8 +694,9 @@ have no text, so the title rule skips them.
   doesn't merge it with typing done within 500ms before or after. If the editor was destroyed
   meanwhile (the user left), nothing happens.
 - The placeholder is a decoration, not content: it is never saved. A Save during an upload saves
-  the note without the pending images; inserting them makes the note dirty again (leaving before
-  saving again loses them, like any unsaved edit; unsaved-changes warnings are out of scope).
+  the note without the pending images; inserting them makes the note dirty again (so leaving
+  before saving again gets the [unsaved-changes](#unsaved-changes) warning). Images still uploading
+  when the user leaves are not inserted anywhere.
 
 **Resize.** Clicking an image selects it (blue outline) and shows four corner handles; dragging one
 resizes the image, keeping its aspect ratio, down to 32px. Releasing stores `width` and `height` on
@@ -804,9 +807,9 @@ and error states) with a New note button and every note; clicking a note opens i
   move to the top. Switching notes also refetches (so a failed first load is retried). While
   refetching, the previous list stays shown; the effect's cleanup cancels a superseded request,
   so an older response never overwrites a newer list.
-- **Switching notes:** clicking a note, New note, or the brand is plain navigation: unsaved edits
-  in the open note are discarded (unsaved-changes warnings remain out of scope). Clicking the note
-  that's already open changes nothing.
+- **Switching notes:** clicking a note, New note, or the brand navigates; with unsaved changes it
+  asks first (see [Unsaved changes](#unsaved-changes)). Clicking the note that's already open
+  changes nothing.
 - **Collapse:** the sidebar header's button (`PanelLeftClose` icon, `aria-label="Hide notes"`)
   hides it; while hidden, the top bar shows a button at its far left (`PanelLeftOpen`,
   `aria-label="Show notes"`) that shows it. Both are `.tool`-style icon buttons with
@@ -907,6 +910,35 @@ in the document JSON.
 - `tags.ts` holds the rule for the UI: `normalizeTag(text)` (lowercase, strip disallowed
   characters, cut to 40), `MAX_TAG_LENGTH = 40`, and `MAX_TAGS = 50`. The server validates
   independently (see API; `coerceTypes: false`, so `tags: "foo"` is a 400, not `["foo"]`).
+
+### Unsaved changes
+
+By user request: if the open note has unsaved changes (the editor is dirty: content or tags
+changed since the last save, or a tag is typed in the tag input but not added) and the user tries
+to leave it, the app warns first.
+
+- **In-app navigation** (a note in the sidebar, New note, the brand, the browser's Back/Forward):
+  `NoteEditor` blocks it with react-router's `useBlocker`. (This needs a data router, so
+  `main.tsx` uses `createBrowserRouter(createRoutesFromElements(…))` + `<RouterProvider>` instead
+  of `<BrowserRouter>`; the routes are unchanged.) The blocker fires only when dirty, the path
+  changes, and the destination isn't this same note's own URL (the new note → `/notes/<id>` step
+  after its first save is not leaving). The dirty flag is read from a ref, so the check is never
+  stale.
+- **The dialog** (`UnsavedDialog.tsx`): a modal `<dialog>` (`showModal()`, in a portal on
+  `document.body`, so it's never inside the inert column behind the narrow overlay) titled
+  "Unsaved changes": "“<title>” has changes you haven't saved. Save them before you go?" (the live
+  title from the breadcrumb). Three buttons:
+  - **Keep editing** (quiet; focused first, so a stray Enter stays; Esc does the same) →
+    `blocker.reset()`: nothing changes.
+  - **Don't save** (red text) → `blocker.proceed()`: the edits are discarded.
+  - **Save** (the gradient button; "Saving…" while in flight) → `save({ stay: false })`, then
+    `blocker.proceed()` if it worked, or `blocker.reset()` (the error shows in the top bar) if it
+    didn't. `stay: false` skips the new note → `/notes/<id>` URL change, since the page is leaving
+    anyway; the sidebar still refreshes (`onSaved`).
+- **Reload or closing the tab** while dirty: a `beforeunload` listener (registered only while
+  dirty) calls `preventDefault()`, so the browser shows its own "Leave site?" prompt (browsers
+  don't allow custom text there).
+- Look: white card, 16px corners, large soft shadow, a blurred translucent backdrop.
 
 ## Branding
 
@@ -1081,3 +1113,8 @@ they never touch `./data`.
     both combine; blank shows everything; "No notes match" when nothing does; existing notes are
     searchable right after the upgrade (`body` backfilled); `npm test` covers parsing, matching,
     the 500-character limit, and the backfill.
+18. Unsaved changes: with unsaved edits (or tags, or a typed tag), clicking another note, New note,
+    the brand, or Back opens the dialog; Keep editing/Esc stays with the edits; Don't save leaves
+    without saving; Save saves and then leaves (a new note is created); a failed save stays with
+    the error; saving with the toolbar (including a new note's first save) never asks; reloading
+    or closing the tab while dirty gets the browser's prompt; a clean note never asks.
