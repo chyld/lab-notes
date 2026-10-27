@@ -1,11 +1,13 @@
+name: lab-notes
+
 services:
-  notes:
+  app:
     build: .
     ports:
       - "${PORT:-3000}:3000"
     volumes:
-      - notes-data:/data
+      - data:/data
     restart: unless-stopped
 
 volumes:
-  notes-data:
+  data:

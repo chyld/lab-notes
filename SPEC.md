@@ -1,6 +1,6 @@
-# Notes MVP — Spec
+# Lab Notes — Spec
 
-A self-hosted notes app (the start of a Google Docs–style app) for a homelab. It has two screens:
+**Lab Notes** is a self-hosted notes app (the start of a Google Docs–style app) for a homelab. It has two screens:
 a list of notes and a note editor. The editor engine is [Tiptap](https://tiptap.dev/).
 
 ## Scope
@@ -64,7 +64,7 @@ web/
     NotesList.tsx           # route "/"
     NotePage.tsx            # route "/notes/:id" (id may be "new"): loading
     NoteEditor.tsx          # the Tiptap editor and Save
-    TopBar.tsx              # "← Notes" bar shared by the note screens
+    TopBar.tsx              # "← Lab Notes" bar shared by the note screens
     styles.css
 ```
 
@@ -178,7 +178,7 @@ POST/PUT send `Content-Type: application/json`. A non-2xx response throws an `Ap
 
 ### `/` — Notes list (`NotesList.tsx`)
 
-- Heading "Notes" and a "New note" button that navigates to `/notes/new`.
+- Heading "Lab Notes" and a "New note" button that navigates to `/notes/new`.
 - The list from `listNotes()`, each item a link to `/notes/:id` showing its title, truncated with a
   CSS ellipsis.
 - States: loading, error (message), empty ("No notes yet").
@@ -190,7 +190,7 @@ instance and saving).
 
 `NotePage`:
 
-- Top bar: a "← Notes" link to `/`, and the editor's Save button (rendered by `NoteEditor`).
+- Top bar: a "← Lab Notes" link to `/`, and the editor's Save button (rendered by `NoteEditor`).
 - Keeps `session = { key, note }` state: `note` is `null` for a new note. It renders
   `<NoteEditor key={session.key} initialNote={session.note} onCreated={...} />` once ready, and
   loading / "Note not found" (with a link back) / error states otherwise.
@@ -265,17 +265,19 @@ sockets from delaying this.
 `compose.yaml`:
 
 ```yaml
+name: lab-notes
+
 services:
-  notes:
+  app:
     build: .
     ports:
       - "${PORT:-3000}:3000"
     volumes:
-      - notes-data:/data
+      - data:/data
     restart: unless-stopped
 
 volumes:
-  notes-data:
+  data:
 ```
 
 A fresh named volume copies `/data`'s ownership from the image, so the non-root `node` user can

@@ -28,7 +28,7 @@ export function NotesList() {
   return (
     <main className="list-page">
       <header className="list-header">
-        <h1>Notes</h1>
+        <h1>Lab Notes</h1>
         <Link to="/notes/new" className="button">
           New note
         </Link>

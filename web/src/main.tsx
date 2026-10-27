@@ -16,7 +16,7 @@ createRoot(document.getElementById("root")!).render(
           element={
             <main className="list-page">
               <p className="muted">Page not found.</p>
-              <Link to="/">← Notes</Link>
+              <Link to="/">← Lab Notes</Link>
             </main>
           }
         />
