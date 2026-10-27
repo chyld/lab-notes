@@ -33,6 +33,10 @@ In scope, and nothing else:
     first. See [Unsaved changes](#unsaved-changes).
 14. **Favorite fonts** (added by user request): star fonts in the font picker; they're kept on the
     server and pinned at the top of the list. See [Favorite fonts](#favorite-fonts).
+15. **Mobile** (added by user request): the sidebar, the top bar, and the editor work well on
+    phones: a compact top bar with Save, the formatting toolbar docked at the bottom above the
+    on-screen keyboard, the notes list as a slide-out drawer, finger-sized controls, and touch
+    image resizing. See [Mobile](#mobile).
 
 Out of scope (the user will decide later): delete, autosave, keyboard
 save shortcut, folders, sharing, auth, real-time collaboration,
@@ -87,7 +91,7 @@ server/
   title.test.ts
   app.test.ts
 web/
-  index.html                # links the favicon and apple-touch-icon
+  index.html                # favicon, apple-touch-icon, and the mobile viewport meta
   public/
     logo.svg                # Lab Notes logo; also the favicon
     apple-touch-icon.png    # 180px, for phone home screens
@@ -104,6 +108,7 @@ web/
     FontSizeControl.tsx     # − [size] + (toolbar control)
     HighlightPicker.tsx     # highlighter button + 8-color palette (toolbar control)
     popover.ts              # shared popover positioning and dismissal (font picker, highlight)
+    media.ts                # the compact (phone) layout query + useCompact(); viewport insets
     fonts.ts                # catalog loading, Google Fonts <link> loading, font-family values
     favoriteFonts.ts        # favorite fonts: cached list + one ordered request queue
     google-fonts.json       # generated catalog: [family, category][] by popularity
@@ -514,8 +519,8 @@ Behavior:
   `RemoveFormatting`, `Highlighter`, `Hash` (line numbers), `Save`.
 - **Look:** Google Docs–like. Icon buttons (lucide icons, 18px) in a light gray rounded bar.
   Hover is a slightly darker gray; pressed is light blue (`#d3e3fd`) with a blue icon
-  (`#0b57d0`); disabled is faded. On narrow screens the row scrolls horizontally rather than
-  wrapping.
+  (`#0b57d0`); disabled is faded. When it doesn't fit, the row scrolls horizontally rather than
+  wrapping. On phones it's a bar at the bottom of the screen: see [Mobile](#mobile).
 - Shortcuts shown in tooltips: Undo `Ctrl+Z`, Redo `Ctrl+Shift+Z`, Bold `Ctrl+B`, Italic `Ctrl+I`,
   Underline `Ctrl+U`, Strikethrough `Ctrl+Shift+S`, Inline code `Ctrl+E`, Bulleted list
   `Ctrl+Shift+8`, Numbered list `Ctrl+Shift+7`, Quote `Ctrl+Shift+B`, Code block `Ctrl+Alt+C`.
@@ -586,7 +591,9 @@ unreachable. The UI shows the first family in the stack without quotes.
   is still loading, and when the search matches nothing). Esc anywhere in the popover closes it and
   returns focus to the editor; Enter on a category chip just toggles the chip. Clicking a row
   applies it. Rows and chips cancel `mousedown`, so focus stays in the search box. Clicking outside
-  the popover, focus leaving it (e.g. Tab past the list), resizing the window, or an element outside
+  the popover, focus moving somewhere outside it (e.g. Tab past the list; focus going nowhere, like
+  iOS's keyboard "Done", doesn't), the window's width changing, its height changing so the popover
+  no longer fits (an on-screen keyboard opening otherwise doesn't close it), or an element outside
   it scrolling (the toolbar scrolls sideways; page scrolls are ignored since the header is sticky)
   closes it. If the catalog chunk fails to load, the popover says so and the next open retries.
 - Rows are memoized, so moving the highlight (or starring a font) re-renders a couple of rows, not
@@ -792,7 +799,14 @@ have no text, so the title rule skips them.
 **Resize.** Clicking an image selects it (blue outline) and shows four corner handles; dragging one
 resizes the image, keeping its aspect ratio, down to 32px. Releasing stores `width` and `height` on
 the node (one undo step; marks the note dirty) and leaves the image selected; as with any selected
-image, typing replaces it (undoable). Mouse only: the library's touch resizing never commits.
+image, typing replaces it (undoable). Touch works the same way (tap to select, drag a handle):
+the library tracks a touch drag but never listens for its end, so our node view listens for a
+handle's `touchstart` (capture phase on its container, since the handle stops the event) and adds
+one-time `touchend`/`touchcancel` listeners on `document` that end the drag like `mouseup` (the
+library's `handleMouseUp`), then remove themselves and the library's leftover `touchmove`. A drag
+that changed the size stores it (one undo step); a tap that didn't, or a `touchcancel` (which puts
+the size back first), ends the drag without storing anything. Handles have `touch-action: none`;
+the library's `touchstart` `preventDefault` keeps the page from scrolling during the drag.
 
 The library ships no handle styling and sets inline pixel `width` *and* `height`, so `styles.css`
 supplies:
@@ -910,9 +924,10 @@ and error states) with a New note button and every note; clicking a note opens i
 - **Remembered:** on wide screens the open/closed choice is stored in
   `localStorage["lab-notes:sidebar"]` (`"open"`/`"closed"`, default open; unavailable storage
   just means not remembered).
-- **Narrow screens** (`matchMedia("(max-width: 816px)")`, the same breakpoint as the CSS, with a
-  `change` listener): the sidebar would crowd out the editor, so it has its own session-only state
-  that starts closed (never stored; only the wide-screen choice is written to `localStorage`).
+- **Narrow screens** (the compact layout, `useCompact()` from `media.ts`: see [Mobile](#mobile)):
+  the sidebar would crowd out the editor, so it has its own session-only state that starts closed
+  (never stored; only the wide-screen choice is written to `localStorage`), except that arriving
+  at `/` (no note open, so nothing else to see) opens it, each time.
   Crossing the breakpoint switches to that width's state. It opens as an overlay (`position:
   fixed`, `z-index: 30` over a translucent backdrop at 29, so above the sticky header and the
   popovers at 10, with a shadow), makes `.note-main` `inert` while open (no tabbing into the
@@ -1042,6 +1057,119 @@ to leave it, the app warns first.
   dirty) calls `preventDefault()`, so the browser shows its own "Leave site?" prompt (browsers
   don't allow custom text there).
 - Look: white card, 16px corners, large soft shadow, a blurred translucent backdrop.
+
+### Mobile
+
+By user request: "the sidebar, the navbar, and the editor need to work very well on a mobile
+interface". The user chose a formatting toolbar docked at the bottom, above the on-screen
+keyboard, and the notes list as a slide-out drawer. The desktop layout doesn't change.
+
+- **Which layout:** the *compact* layout is `(max-width: 816px), (pointer: coarse) and
+  (max-height: 520px) and (max-width: 1000px)`: phones in portrait, phones in landscape (an iPhone
+  is 844×390, wider than 816), and narrow desktop windows. The width cap keeps a touch tablet in
+  landscape out of it when its keyboard opens and the window gets short. `media.ts` exports the
+  query (`COMPACT`) and `useCompact()` (a `matchMedia` hook with a `change` listener, replacing the
+  sidebar's own); `styles.css` repeats the query text in its `@media` rules. Separately, *touch*
+  (`(pointer: coarse)`) decides only whether opening a popover moves focus, and the image handle
+  size (below).
+- **Viewport meta** (`index.html`): `width=device-width, initial-scale=1, viewport-fit=cover,
+  interactive-widget=resizes-content`. Where supported (Chrome on Android), `resizes-content`
+  shrinks the layout viewport when the keyboard opens, so a bar fixed to the bottom sits above it;
+  elsewhere the keyboard inset below does the same job. `viewport-fit=cover` lets the layout use
+  the whole screen, so the edges pad themselves with `env(safe-area-inset-*)` (notch, rounded
+  corners, home indicator). Pinch zoom stays allowed.
+- **Keyboard inset** (`useViewportInsets()` in `media.ts`, called once by `Layout`): iOS Safari's
+  keyboard covers the bottom of the layout viewport instead of shrinking it, and iOS may pan the
+  visible area down. On `visualViewport` `resize`/`scroll` and window `resize` (at most once per
+  animation frame) it sets, on `document.documentElement`:
+  - `--keyboard-inset`: `innerHeight − (visualViewport.offsetTop + visualViewport.height)`, the
+    part of the layout viewport below the visible area (the keyboard), or `0px` when that's under
+    80px (a keyboard is taller; a scrollbar or a settling browser bar isn't one). A bar at
+    `bottom: var(--keyboard-inset)` has its bottom edge at the visible area's bottom, however far
+    iOS has panned;
+  - `--viewport-top`: `visualViewport.offsetTop`, how far iOS has panned the visible area down;
+  - `--viewport-height`: `visualViewport.height`.
+
+  While the page is pinch-zoomed (`visualViewport.scale` not 1) it sets `0px`, `0px`, and
+  `innerHeight`, so the bars don't chase the zoomed view (zooming with the keyboard up leaves the
+  bottom bar behind the keyboard until the zoom is undone). Without `visualViewport`, nothing is
+  set and the CSS falls back to `0px` / `100dvh`.
+- **Top bar (compact):** 52px tall plus `env(safe-area-inset-top)`, side padding at least 12px or
+  the safe-area inset. In order: Show notes (40×40), the logo (the brand link; its "Lab Notes"
+  text is visually hidden so the link keeps its name), the note's title (the breadcrumb, without
+  the `/`; it takes the remaining width and truncates), and **Save** at the far right (40×40,
+  the same tool, in the accent color while there's something to save). Save moves here from the
+  toolbar: `NoteEditor` renders it in both places and CSS shows one (the toolbar's, with its
+  divider, in the wide layout; the top bar's in the compact one), so exactly one Save is visible.
+  A save error shows on its own line under the bar instead of beside the title.
+- **No trapped bars:** a `transform`, `filter`, or `backdrop-filter` on an element makes it the box
+  its `position: fixed` descendants are placed in, and the toolbar lives inside `.editor-header`.
+  So in the compact layout `.editor-header` only sticks (no background, filter, or transform); the
+  frosted look moves to the top bar (`.editor-bar`), which also follows iOS's panning with
+  `transform: translateY(var(--viewport-top))` so it stays at the top of the visible area while
+  the keyboard is up. (Status screens' top bar is the same element.)
+- **Toolbar (compact):** the same tools in the same order (minus Save), as a flat frosted bar
+  fixed to the bottom of the screen: `left: 0; right: 0; bottom: var(--keyboard-inset)`, a hairline
+  top border, `z-index: 20` (above the page, below the drawer's backdrop at 29). It rides above the
+  on-screen keyboard while typing and rests at the bottom of the screen otherwise. Below the
+  buttons it's padded by `--toolbar-pad: max(6px, env(safe-area-inset-bottom) −
+  var(--keyboard-inset))` (the home indicator, unless the keyboard covers it); its sides by at
+  least 8px or the safe-area inset. `--toolbar-height` is `47px + --toolbar-pad` (1px border, 6px
+  padding, 40px buttons). It scrolls sideways with no visible scrollbar. Buttons are 40×40 (18px
+  icons), selects and the font button 40px tall.
+- **Keeping the keyboard up:** toolbar buttons keep cancelling `mousedown` (on Android, the tap's
+  compatibility `mousedown`), so the editor keeps focus while formatting. So do the font and
+  highlight buttons, and a tap on the toolbar's or a popover's background (gaps, padding,
+  dividers): on iOS that would otherwise blur the editor and close the keyboard (`keepFocus` in
+  `popover.ts`: everything but `input`, `select`, `textarea`). The text-style `select` and the
+  font-size field do take focus (the native picker, the number keyboard); after a change, focus
+  returns to the editor as before, though iOS may leave the keyboard closed until the next tap in
+  the text. Accepted.
+- **Room for the bar:** the page gets bottom padding of `--toolbar-height`, so the last line
+  scrolls clear of the bar. While typing, the caret is kept between the bars: in the compact layout
+  the editor's `handleScrollToSelection` prop (set with `editor.view.setProps`, which merges, when
+  the layout changes; `undefined` in the wide layout hands scrolling back to ProseMirror) measures
+  the top bar's bottom and the toolbar's top on screen and `window.scrollBy`s the caret
+  (`coordsAtPos`) to at least 12px inside them. Measuring the bars covers the safe-area insets and
+  iOS's panning, which ProseMirror's own scrolling doesn't: it treats the visible area as starting
+  at the top of the layout viewport.
+- **Popovers (compact)** — fonts and highlight colors — open as sheets just above the bottom bar
+  instead of under their button (`usePopoverPlacement` in `popover.ts` returns `sheet: true` and
+  no inline position; CSS `.popover-sheet` places it): `position: fixed`, the full width minus 8px
+  (or the safe-area inset) on each side, `bottom: calc(var(--keyboard-inset) + var(--toolbar-height)
+  + 8px)`, `z-index: 25`, and at most the room between the bars (`--viewport-height` minus the top
+  bar and `--toolbar-height`, minus 24px), but never less than 220px: when there's less room
+  (landscape with the keyboard up) it may cover the top bar, and the whole sheet scrolls rather
+  than squeezing the font list below three rows. A sheet isn't anchored to its button, so the
+  toolbar scrolling sideways and height-only resizes don't close it; a tap outside, Esc, choosing,
+  and a width change still do. Sizes: font rows 44px tall, category chips 32px, the search box
+  44px, stars a 40px target, swatches 36px, "None" 44px.
+- **Focus on touch:** on a touch screen (`(pointer: coarse)`), opening the font or highlight
+  popover doesn't move focus into it (no autofocus on the font search or a swatch): the editor
+  keeps focus, so the keyboard doesn't jump closed and open again, and the font list isn't covered
+  by a keyboard nobody asked for. Tapping the font search box focuses it to type. Choosing a font
+  or color returns focus to the editor as before.
+- **Notes drawer (compact):** the sidebar overlay (as before) is `min(320px, 86vw)` wide, padded by
+  the safe-area insets, and spans the visible area (`top: var(--viewport-top)`, `height:
+  var(--viewport-height, 100dvh)`), so iOS's keyboard (while searching) doesn't cover the end of
+  the list. Hide notes is 40×40; New note and the search box are 44px tall; note rows at least
+  52px; tag chips 28px tall. It opens each time you arrive at `/` (see [Notes
+  sidebar](#notes-sidebar)).
+- **No zooming into fields:** iOS zooms the page when a field under 16px gets focus, so in the
+  compact layout every input and select is at least 16px: the notes search, the tag input, the
+  font search, the font size, and the text-style select.
+- **Notch (landscape):** the note's text, the tag row, the line-number gutter, and the status and
+  empty screens pad themselves by the safe-area insets too.
+- **Tag row (compact):** chips 28px tall; each chip's × has a 32×32 tap area (without changing the
+  chip's look).
+- **Unsaved-changes dialog (compact):** its buttons are 44px tall and wrap to full-width rows when
+  they don't fit.
+- **Images on touch:** tap to select, drag a corner to resize (see [Images](#images)); on touch
+  screens the handles are 20px with a 40px target.
+- Nothing here changes the wide layout: every rule is inside the compact media query, except the
+  viewport meta, `--keyboard-inset` and friends (0 on desktop), the image touch fix and touch
+  handle size, keeping focus on toolbar/popover background clicks, the popover dismissal rules,
+  and the touch-only focus rule.
 
 ## Branding
 
@@ -1226,3 +1354,11 @@ they never touch `./data`.
     in the order added; the picker opens with them in view; starring again removes it; favorites persist across reloads and devices (server);
     applying a font from the Favorites group works like any row; the API validates family names
     and caps favorites at 200; `npm test` covers the API.
+20. Mobile: at 390×844 (portrait) and 844×390 (landscape, touch) the app uses the compact layout:
+    a 52px top bar with Show notes, the logo, the title, and Save; the formatting toolbar fixed to
+    the bottom (above the on-screen keyboard while typing, on iOS and Android), sideways
+    scrolling, 40px buttons; the last line of a note scrolls clear of the bar and typing keeps the
+    caret visible; the notes list is a drawer that opens on `/` and closes after picking a note;
+    the font and highlight popovers open as sheets above the bar without closing the keyboard;
+    no field zooms the page on focus; images resize by touch (one undo step, saved); a wide
+    desktop window looks and works exactly as before.
