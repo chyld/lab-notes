@@ -273,7 +273,8 @@ Google Docs order, as groups separated by thin dividers:
 | Clear | Clear formatting |
 
 Nothing else: no font family/size, colors, highlight, alignment, indent buttons, images, tables, or
-anything StarterKit does not include.
+anything StarterKit does not include. StarterKit's shortcuts without a control (e.g. Shift+Enter
+line break, `Ctrl+Alt+0`–`6` paragraph/heading) keep working.
 
 Behavior:
 
@@ -281,7 +282,9 @@ Behavior:
   returned an editor (the prop is a non-null `Editor`). One `.editor-header` wrapper holds both
   rows and is the only sticky element.
 - Each button runs `editor.chain().focus().<command>().run()` and cancels `mousedown`, so focus
-  and selection stay in the editor. The select's `onChange` also runs through
+  and selection stay in the editor. When a button is activated from the keyboard (Enter/Space,
+  `event.detail === 0`) it runs without `.focus()`, so focus stays on the toolbar and the next
+  control is one Tab away; the command still applies to the editor's selection. The select's `onChange` also runs through
   `editor.chain().focus()` (no `mousedown` cancel on the select, which would stop it opening).
   Commands: `undo`, `redo`, `toggleBold`, `toggleItalic`, `toggleUnderline`,
   `toggleStrike`, `toggleCode`, `toggleBulletList`, `toggleOrderedList`, `toggleBlockquote`,
@@ -296,15 +299,22 @@ Behavior:
   `setHeading({ level: N })`. In a list item, `setHeading` lifts the line out of the list (Tiptap's
   `setNode` falls back to `clearNodes()`, since list items must start with a paragraph); that is
   accepted.
-- **Link:** if the cursor or selection is in a link, the button is pressed. Clicking opens
-  `window.prompt("Link URL (leave empty to remove)", currentHref ?? "https://")`. The answer is trimmed, and a value with
-  no scheme that doesn't start with `/` or `#` gets `https://` prepended (otherwise `example.com`
-  would be stored as a relative link). Then: cancel, or the untouched default `https://`, does
-  nothing; empty removes the link (`extendMarkRange("link").unsetLink()`); otherwise, if
-  `editor.can()` says `extendMarkRange("link").setLink({ href })` would succeed, it runs. Tiptap's
-  `setLink` refuses unsafe URLs (e.g. `javascript:`) via `isAllowedUri`; checking first means a
-  refusal changes nothing (not even the selection) and shows an alert. The button is disabled when
-  not in a link and either the selection is empty or links aren't allowed there (code blocks).
+- **Link:** if the cursor or selection is in a link, the button is pressed. Clicking reads the
+  current link's URL and opens `window.prompt("Link URL (leave empty to remove)", currentHref ??
+  "https://")`. Every later step extends over *that* link (`extendMarkRange("link", { href:
+  currentHref })`), so at the boundary between two adjacent links the edit hits the link the
+  prompt showed. The answer is trimmed, then normalized:
+  - a bare email (`user@example.com`) gets `mailto:`;
+  - a value with no scheme that doesn't start with `/` or `#` gets `https://` (otherwise
+    `example.com` would be stored as a relative link); `host:port` (`localhost:3000`) is not
+    mistaken for a scheme.
+
+  Then: cancel, or a scheme with nothing after it (the untouched `https://`, `HTTPS://`,
+  `http://`), does nothing; empty removes the link (`unsetLink()`); otherwise, if `editor.can()`
+  says `extendMarkRange(...).setLink({ href })` would succeed, it runs. Tiptap's `setLink` refuses
+  unsafe URLs (e.g. `javascript:`) via `isAllowedUri`; checking first means a refusal changes
+  nothing (not even the selection) and shows an alert. The button is disabled when not in a link
+  and either the selection is empty or links aren't allowed there (code blocks).
   StarterKit is configured with `link: { openOnClick: false }` (the one change from its defaults):
   with the default, any plain click on a link opens it in a new tab and never places the cursor
   in it, so links couldn't be edited by mouse. Now a click places the cursor, like Google Docs.
@@ -318,7 +328,8 @@ Behavior:
 - **Accessibility:** the row is `role="group"` with `aria-label="Formatting"`, not
   `role="toolbar"`, because every control is a plain tab stop (no arrow-key roving tabindex).
   Every button is `type="button"` with an `aria-label` and a `title` tooltip that includes its
-  shortcut when it has one, e.g. "Bold (Ctrl+B)"; on macOS `Ctrl` shows as `⌘` and `Alt` as `⌥`.
+  shortcut when it has one, e.g. "Bold (Ctrl+B)"; on macOS (Tiptap's `isMacOS()`, the same check
+  that decides what `Mod` binds to) it uses symbols, e.g. "Strikethrough (⌘⇧S)".
   Buttons with a shortcut also set `aria-keyshortcuts` (e.g. `Control+B`, `Meta+B` on macOS).
   Known trade-off: the select refocuses the editor on every `change`, and on Windows/Linux arrow
   keys on a closed select fire `change`, so keyboard users open it first (Alt+↓) and pick with
