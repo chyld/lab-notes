@@ -1,0 +1,172 @@
+:root {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #1f1f1f;
+  background: #f8f9fa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+a {
+  color: #0b57d0;
+}
+
+button,
+.button {
+  display: inline-block;
+  padding: 0.5rem 1.25rem;
+  border: 0;
+  border-radius: 999px;
+  background: #0b57d0;
+  color: #fff;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+button:disabled {
+  background: #c4c7c5;
+  cursor: default;
+}
+
+.muted {
+  color: #5f6368;
+}
+
+.error {
+  color: #b3261e;
+}
+
+/* Notes list */
+
+.list-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+.list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.notes {
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #dadce0;
+  border-radius: 8px;
+}
+
+.notes li + li {
+  border-top: 1px solid #dadce0;
+}
+
+.notes a {
+  display: block;
+  padding: 0.875rem 1rem;
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notes a:hover {
+  background: #f1f3f4;
+}
+
+/* Note editor */
+
+.editor-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.5rem;
+  background: #fff;
+  border-bottom: 1px solid #dadce0;
+}
+
+.editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.status {
+  padding: 2rem 1.5rem;
+}
+
+.page-wrap {
+  padding: 2rem 1rem;
+}
+
+.page {
+  max-width: 816px;
+  margin: 0 auto;
+  background: #fff;
+  border: 1px solid #dadce0;
+  box-shadow: 0 1px 3px rgb(60 64 67 / 15%);
+}
+
+.page .ProseMirror {
+  min-height: 1056px;
+  padding: 96px;
+  outline: none;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.page .ProseMirror > :first-child {
+  margin-top: 0;
+}
+
+.page blockquote {
+  margin-left: 0;
+  padding-left: 1rem;
+  border-left: 3px solid #dadce0;
+  color: #5f6368;
+}
+
+.page code {
+  padding: 0.1em 0.3em;
+  background: #f1f3f4;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.page pre {
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  background: #f1f3f4;
+  border-radius: 6px;
+}
+
+.page pre code {
+  padding: 0;
+  background: none;
+}
+
+.page hr {
+  border: 0;
+  border-top: 1px solid #dadce0;
+  margin: 1.5rem 0;
+}
+
+@media (max-width: 816px) {
+  .page .ProseMirror {
+    min-height: 70vh;
+    padding: 2rem 1.25rem;
+  }
+}

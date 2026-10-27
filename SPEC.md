@@ -60,8 +60,11 @@ web/
   src/
     main.tsx                # router setup
     api.ts                  # typed fetch helpers
+    editor.ts               # shared Tiptap extensions + content validation
     NotesList.tsx           # route "/"
-    NotePage.tsx            # route "/notes/:id" (id may be "new")
+    NotePage.tsx            # route "/notes/:id" (id may be "new"): loading
+    NoteEditor.tsx          # the Tiptap editor and Save
+    TopBar.tsx              # "← Notes" bar shared by the note screens
     styles.css
 ```
 
@@ -157,11 +160,13 @@ are not deeply validated in the MVP.
 `buildApp` registers `@fastify/static` only when `staticDir` is given and exists (`index.ts`
 passes `resolve(import.meta.dirname, "../dist/web")`). The one `setNotFoundHandler`:
 
-1. If the method is `GET` or `HEAD`, the URL is not under `/api`, and static serving is
-   registered → `reply.sendFile("index.html")` (SPA fallback for `/notes/<id>`).
+1. If the method is `GET` or `HEAD`, the path is not under `/api`, the last path segment has no
+   file extension, and static serving is registered → `reply.sendFile("index.html")` (SPA
+   fallback for `/notes/<id>`).
 2. Otherwise → `404 { error: "Not found" }`.
 
-So `POST /anything` is a JSON 404, never `index.html`.
+So `POST /anything` is a JSON 404, never `index.html`, and a missing file such as a stale
+`/assets/*.js` is a 404 rather than HTML served as JavaScript.
 
 ## Frontend
 
@@ -193,19 +198,22 @@ instance and saving).
   - If `id` equals `createdIdRef.current` (the id this page just got back from `POST`), do
     nothing. This is the new-note → saved-note URL change: no refetch, no remount.
   - If `id === "new"`: `session = { key: "new", note: null }`.
-  - Otherwise: show loading, `getNote(id)`, then `session = { key: id, note }`.
+  - Otherwise: show loading, `getNote(id)`, then `session = { key: id, note }`. Before mounting
+    the editor, the content is validated against the StarterKit schema (`isValidContent` in
+    `editor.ts`: `schema.nodeFromJSON(content).check()`, the same check Tiptap's
+    `enableContentCheck` runs). Invalid content shows "This note can't be opened: its content is
+    invalid." with no editor and no Save, so an invalid note is never shown blank and saved over.
+    (Done here rather than via `onContentError`, which fires during React render.)
+  - Each new-note session gets a fresh key (`new-1`, `new-2`, …).
 - `onCreated(id)`: set `createdIdRef.current = id`, then `navigate("/notes/" + id, { replace: true })`.
   `session.key` does not change, so `NoteEditor` is not remounted and keeps content and cursor.
 
 `NoteEditor` (`useEditor` is always called unconditionally here, with no `deps` argument, because
 deps would destroy and recreate the editor):
 
-- `useEditor({ extensions: [StarterKit], content: initialNote?.content ?? "", autofocus: initialNote ? false : "end", enableContentCheck: true, onContentError, onUpdate })`.
+- `useEditor({ extensions, content: initialNote?.content ?? "", autofocus: initialNote ? false : "end", onUpdate })`.
   `content` applies only at creation, which is why `NotePage` mounts this component only after
   loading.
-- `enableContentCheck` + `onContentError`: if a stored document does not fit the schema, show
-  "This note can't be opened: its content is invalid." instead of the editor and no Save button,
-  so an invalid note is never shown blank and saved over.
 - Holds `noteId` in a ref, initialized from `initialNote?.id ?? null`. Save uses `PUT` when
   `noteId` is set, otherwise `POST`, then stores the returned id in the ref and calls
   `onCreated(id)`. Later saves `PUT`.
@@ -299,4 +307,5 @@ they never touch `./data`.
 6. Unsaved edits are not persisted (no autosave).
 7. Notes survive `docker compose down && docker compose up -d`.
 8. `npm run typecheck` and `npm test` pass.
-9. API errors are `{ error }` JSON; `POST /anything` and unknown `/api/*` are JSON 404s.
+9. API errors are `{ error }` JSON; `POST /anything`, unknown `/api/*`, and missing files are
+   JSON 404s.
