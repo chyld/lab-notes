@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Outlet, useParams } from "react-router";
+import { useViewportInsets } from "./media.ts";
 import { Sidebar, SidebarProvider, useSidebarState } from "./Sidebar.tsx";
 import { TopBar } from "./TopBar.tsx";
 
@@ -14,6 +15,14 @@ export function Layout() {
   const [listVersion, setListVersion] = useState(0);
   const notesChanged = useCallback(() => setListVersion((v) => v + 1), []);
   const value = useMemo(() => ({ ...sidebar, notesChanged }), [sidebar, notesChanged]);
+  useViewportInsets();
+
+  // On a phone, "/" has nothing to show but the notes, so arriving there opens the drawer.
+  const home = id === null;
+  const { narrow, setOpen } = sidebar;
+  useEffect(() => {
+    if (home && narrow) setOpen(true);
+  }, [home, narrow, setOpen]);
 
   return (
     <SidebarProvider value={value}>

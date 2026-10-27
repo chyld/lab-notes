@@ -1,14 +1,36 @@
 import { useEffect, useRef, useState } from "react";
 import { useBlocker } from "react-router";
 import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
+import type { EditorView } from "@tiptap/pm/view";
+import { Save } from "lucide-react";
 import { createNote, errorMessage, updateNote, type Note } from "./api.ts";
 import { extensions, liveTitle, loadDocumentFonts } from "./editor.ts";
 import { LineNumbers, useLineNumbersSetting } from "./LineNumbers.tsx";
+import { useCompact } from "./media.ts";
 import { TagEditor } from "./TagEditor.tsx";
+import { Tool } from "./ToolButton.tsx";
 import { UnsavedDialog } from "./UnsavedDialog.tsx";
 import { MAX_TAGS, normalizeTag } from "./tags.ts";
 import { Toolbar } from "./Toolbar.tsx";
 import { TopBar } from "./TopBar.tsx";
+
+/**
+ * Phones: keep the caret between the top bar and the bottom toolbar while typing. ProseMirror's
+ * own scrolling measures against the visible area as if it started at the top of the page, which
+ * is wrong while iOS has panned it for the keyboard; the bars, though, are always drawn at its
+ * edges, so measure them.
+ */
+function scrollCaretBetweenBars(view: EditorView): boolean {
+  const screen = view.dom.closest(".editor-screen");
+  const top = screen?.querySelector(".editor-bar")?.getBoundingClientRect().bottom;
+  const bottom = screen?.querySelector(".toolbar-row")?.getBoundingClientRect().top;
+  if (top === undefined || bottom === undefined || bottom - top < 48) return false; // ProseMirror's way
+  const caret = view.coordsAtPos(view.state.selection.head);
+  const gap = 12;
+  if (caret.top < top + gap) window.scrollBy(0, caret.top - (top + gap));
+  else if (caret.bottom > bottom - gap) window.scrollBy(0, caret.bottom - (bottom - gap));
+  return true;
+}
 
 type Props = {
   initialNote: Note | null;
@@ -60,6 +82,15 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
       loadDocumentFonts(editor);
     },
   });
+
+  // On phones the top bar and the bottom toolbar cover the screen's edges: scroll the caret clear
+  // of them while typing. setProps merges, so the editor's other props stay; `undefined` hands
+  // scrolling back to ProseMirror.
+  const compact = useCompact();
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.view.setProps({ handleScrollToSelection: compact ? scrollCaretBetweenBars : undefined });
+  }, [editor, compact]);
 
   const dirty = version !== savedVersion || tagDraft !== "";
   // The same, from refs: current even between a state update and the render it causes.
@@ -197,6 +228,14 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
               {error}
             </span>
           )}
+          {/* On phones Save lives here (the toolbar is at the bottom); CSS shows one of the two. */}
+          <Tool
+            icon={Save}
+            label={saving ? "Saving…" : "Save"}
+            onClick={() => void save()}
+            disabled={!dirty || saving}
+            className="tool-save top-save"
+          />
         </TopBar>
         {editor && (
           <Toolbar

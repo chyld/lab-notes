@@ -27,12 +27,46 @@ const YellowShortcutHighlight = Highlight.extend({
 
 // Tiptap's resizable image view ignores width/height changes it didn't make itself, so undoing or
 // redoing a resize would leave the old size on screen. Apply them on every update.
+// It also follows a touch drag on a handle but never listens for the touch ending, so a resize by
+// touch was never stored: end it the way `mouseup` does.
 const ResizableImage = Image.extend({
   addNodeView() {
     const create = this.parent?.();
     if (!create) return null;
     return (props) => {
       const view = create(props) as ResizableNodeView;
+      const internals = view as unknown as {
+        handleMouseUp: () => void;
+        handleTouchMove: (event: TouchEvent) => void;
+        onCommit: (width: number, height: number) => void;
+      };
+      view.dom.addEventListener(
+        "touchstart",
+        (event) => {
+          if (!(event.target instanceof Element) || !event.target.closest("[data-resize-handle]")) return;
+          const { element } = view;
+          const start = { width: element.style.width, height: element.style.height, size: element.offsetWidth };
+          const end = (event: TouchEvent) => {
+            document.removeEventListener("touchend", end);
+            document.removeEventListener("touchcancel", end);
+            document.removeEventListener("touchmove", internals.handleTouchMove); // the library leaves it
+            const cancelled = event.type === "touchcancel";
+            if (cancelled) Object.assign(element.style, { width: start.width, height: start.height });
+            // A tap that didn't resize (or a cancelled drag) ends the drag without storing a size.
+            if (cancelled || element.offsetWidth === start.size) {
+              const commit = internals.onCommit;
+              internals.onCommit = () => {};
+              internals.handleMouseUp();
+              internals.onCommit = commit;
+            } else {
+              internals.handleMouseUp(); // stores the new size: one undo step
+            }
+          };
+          document.addEventListener("touchend", end);
+          document.addEventListener("touchcancel", end);
+        },
+        true, // before the handle's own listener, which stops the event there
+      );
       const update = view.update.bind(view);
       view.update = (node, decorations, innerDecorations) => {
         if (!update(node, decorations, innerDecorations)) return false;

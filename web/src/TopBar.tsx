@@ -14,7 +14,7 @@ export function TopBar({ title, children }: Props) {
       <div className="editor-bar-start">
         <ShowNotesButton />
         <Link to="/" className="brand-link">
-          <img src="/logo.svg" alt="" width={24} height={24} /> Lab Notes
+          <img src="/logo.svg" alt="" width={24} height={24} /> <span className="brand-name">Lab Notes</span>
         </Link>
         {title !== undefined && (
           <>

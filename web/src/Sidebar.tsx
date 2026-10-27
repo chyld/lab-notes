@@ -2,10 +2,10 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { Link } from "react-router";
 import { PanelLeftClose, PanelLeftOpen, Plus, Search } from "lucide-react";
 import { errorMessage, listNotes, type NoteSummary } from "./api.ts";
+import { useCompact } from "./media.ts";
 import { normalizeTag, tagHue } from "./tags.ts";
 
 const STORAGE_KEY = "lab-notes:sidebar";
-const NARROW = "(max-width: 816px)";
 
 type SidebarState = { open: boolean; narrow: boolean; setOpen: (open: boolean) => void };
 
@@ -23,23 +23,12 @@ export function useNotesChanged(): () => void {
   return useContext(SidebarContext)?.notesChanged ?? noop;
 }
 
-function useNarrow(): boolean {
-  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW).matches);
-  useEffect(() => {
-    const query = window.matchMedia(NARROW);
-    const onChange = () => setNarrow(query.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
-  return narrow;
-}
-
 /**
  * Open/closed. Wide screens remember the choice in this browser; narrow screens, where the sidebar
  * is an overlay, start closed on every load.
  */
 export function useSidebarState(): SidebarState {
-  const narrow = useNarrow();
+  const narrow = useCompact();
   const [wideOpen, setWideOpen] = useState(() => {
     try {
       return localStorage.getItem(STORAGE_KEY) !== "closed";

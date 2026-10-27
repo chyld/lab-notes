@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/react";
 import { Ban, Highlighter } from "lucide-react";
 import { HIGHLIGHTS } from "./highlights.ts";
-import { useDismiss, usePopoverPosition } from "./popover.ts";
+import { keepFocus, useDismiss, usePopoverPlacement } from "./popover.ts";
 
 const POPOVER_WIDTH = 252;
 
@@ -25,6 +25,7 @@ export function HighlightPicker({ editor, current, disabled }: Props & { disable
         aria-haspopup="dialog"
         aria-expanded={open}
         disabled={disabled}
+        onMouseDown={(event) => event.preventDefault()} // the editor keeps focus (and a phone's keyboard)
         onClick={() => setOpen((o) => !o)}
       >
         <Highlighter size={18} aria-hidden />
@@ -42,8 +43,8 @@ type PopoverProps = Props & { anchor: HTMLElement; onClose: () => void };
 
 function HighlightPopover({ editor, current, anchor, onClose }: PopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
-  const position = usePopoverPosition(anchor, POPOVER_WIDTH);
-  const onBlur = useDismiss(popoverRef, anchor, onClose);
+  const { sheet, style, touch } = usePopoverPlacement(anchor, POPOVER_WIDTH);
+  const onBlur = useDismiss(popoverRef, anchor, onClose, sheet);
   // Focus starts on the current color, or the first.
   const focusIndex = Math.max(0, HIGHLIGHTS.findIndex((h) => h.color === current));
 
@@ -63,12 +64,13 @@ function HighlightPopover({ editor, current, anchor, onClose }: PopoverProps) {
   return createPortal(
     <div
       ref={popoverRef}
-      className="highlight-popover"
+      className={sheet ? "highlight-popover popover-sheet" : "highlight-popover"}
       role="dialog"
       aria-label="Highlight colors"
-      style={{ top: position.top, left: position.left, width: POPOVER_WIDTH }}
+      style={style}
       onKeyDown={onKeyDown}
       onBlur={onBlur}
+      onMouseDown={keepFocus}
     >
       <div className="highlight-swatches">
         {HIGHLIGHTS.map(({ name, color }, i) => (
@@ -80,7 +82,7 @@ function HighlightPopover({ editor, current, anchor, onClose }: PopoverProps) {
             aria-label={name}
             title={name}
             aria-pressed={color === current}
-            autoFocus={i === focusIndex}
+            autoFocus={!touch && i === focusIndex}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => apply(color)}
           />

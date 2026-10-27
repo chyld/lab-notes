@@ -19,7 +19,7 @@ import {
   type CatalogFont,
   type FontCategory,
 } from "./fonts.ts";
-import { useDismiss, usePopoverPosition } from "./popover.ts";
+import { keepFocus, useDismiss, usePopoverPlacement } from "./popover.ts";
 
 const POPOVER_WIDTH = 300;
 
@@ -88,6 +88,7 @@ export function FontPicker({ editor, current, disabled }: Props & { disabled: bo
         aria-haspopup="dialog"
         aria-expanded={open}
         disabled={disabled}
+        onMouseDown={(event) => event.preventDefault()} // the editor keeps focus (and a phone's keyboard)
         onClick={() => setOpen((o) => !o)}
       >
         <span className="font-button-name">{current ?? "Default"}</span>
@@ -122,8 +123,8 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
   const toggleCountRef = useRef(0); // all toggles, any font
   const popoverRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const position = usePopoverPosition(anchor, POPOVER_WIDTH);
-  const onBlur = useDismiss(popoverRef, anchor, onClose);
+  const { sheet, style, touch } = usePopoverPlacement(anchor, POPOVER_WIDTH);
+  const onBlur = useDismiss(popoverRef, anchor, onClose, sheet);
 
   useEffect(() => {
     let alive = true;
@@ -334,12 +335,13 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
   return createPortal(
     <div
       ref={popoverRef}
-      className="font-popover"
+      className={sheet ? "font-popover popover-sheet" : "font-popover"}
       role="dialog"
       aria-label="Fonts"
-      style={{ top: position.top, left: position.left, width: POPOVER_WIDTH }}
+      style={style}
       onKeyDown={onKeyDown}
       onBlur={onBlur}
+      onMouseDown={keepFocus}
     >
       <input
         ref={searchRef}
@@ -352,7 +354,7 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
         aria-controls="font-list"
         aria-activedescendant={optionId(activeRow.key)}
         aria-keyshortcuts={IS_MAC ? "Meta+D" : "Control+D"}
-        autoFocus
+        autoFocus={!touch} // on a touch screen, a keyboard popping up would cover the list
         value={query}
         onChange={(event) => setQuery(event.target.value)}
       />
