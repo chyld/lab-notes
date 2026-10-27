@@ -105,10 +105,13 @@ button:disabled {
 
 /* Note editor */
 
-.editor-bar {
+.editor-header {
   position: sticky;
   top: 0;
   z-index: 1;
+}
+
+.editor-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -182,6 +185,82 @@ button:disabled {
   border: 0;
   border-top: 1px solid #dadce0;
   margin: 1.5rem 0;
+}
+
+/* Toolbar */
+
+.toolbar-row {
+  padding: 0.5rem 1rem;
+  background: #fff;
+  border-bottom: 1px solid #dadce0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 12px;
+  overflow-x: auto;
+  background: #edf2fa;
+  border-radius: 999px;
+}
+
+.tool {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #444746;
+}
+
+.tool:hover:not(:disabled) {
+  background: rgb(68 71 70 / 8%);
+}
+
+.tool[aria-pressed="true"] {
+  background: #d3e3fd;
+  color: #0b57d0;
+}
+
+.tool:disabled {
+  background: transparent;
+  opacity: 0.38;
+}
+
+.tool-select {
+  flex: none;
+  height: 28px;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #1f1f1f;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.tool-select:hover {
+  background: rgb(68 71 70 / 8%);
+}
+
+.tool:focus-visible,
+.tool-select:focus-visible {
+  outline: 2px solid #0b57d0;
+  outline-offset: 1px;
+}
+
+.tool-divider {
+  flex: none;
+  width: 1px;
+  height: 20px;
+  margin: 0 6px;
+  background: #c7c7c7;
 }
 
 @media (max-width: 816px) {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { createNote, errorMessage, updateNote, type Note } from "./api.ts";
 import { extensions } from "./editor.ts";
+import { Toolbar } from "./Toolbar.tsx";
 import { TopBar } from "./TopBar.tsx";
 
 type Props = {
@@ -68,16 +69,19 @@ export function NoteEditor({ initialNote, onCreated }: Props) {
 
   return (
     <>
-      <TopBar>
-        {error && (
-          <span className="error" role="alert">
-            {error}
-          </span>
-        )}
-        <button type="button" onClick={save} disabled={!editor || !dirty || saving}>
-          {saving ? "Saving…" : "Save"}
-        </button>
-      </TopBar>
+      <div className="editor-header">
+        <TopBar>
+          {error && (
+            <span className="error" role="alert">
+              {error}
+            </span>
+          )}
+          <button type="button" onClick={save} disabled={!editor || !dirty || saving}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </TopBar>
+        {editor && <Toolbar editor={editor} />}
+      </div>
       <main className="page-wrap">
         <EditorContent editor={editor} className="page" />
       </main>
