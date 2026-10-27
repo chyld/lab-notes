@@ -98,7 +98,7 @@ web/
     imagePaste.ts           # paste-to-upload plugin with an "Uploading image…" placeholder
     LineNumbers.tsx         # line-number gutter: measures visual lines, renders the numbers
     Sidebar.tsx             # collapsible notes sidebar + its open/closed state (context)
-    TopBar.tsx              # "← Lab Notes" bar shared by the note screens
+    TopBar.tsx              # "← Lab Notes" bar (+ Show notes button) shared by the note screens
     styles.css
 scripts/
   update-google-fonts.ts    # regenerates web/src/google-fonts.json (npm run fonts:update)
@@ -272,7 +272,8 @@ instance and saving).
 
 `NotePage`:
 
-- Top bar: a "← Lab Notes" link to `/`, and the editor's Save button (rendered by `NoteEditor`).
+- Top bar: the Show notes button while the [sidebar](#notes-sidebar) is hidden, a "← Lab Notes"
+  link to `/`, and the editor's Save button (rendered by `NoteEditor`).
 - Keeps `session = { key, note }` state: `note` is `null` for a new note. It renders
   `<NoteEditor key={session.key} initialNote={session.note} onCreated={...} />` once ready, and
   loading / "Note not found" (with a link back) / error states otherwise.
@@ -313,7 +314,7 @@ deps would destroy and recreate the editor):
 - **Leaving mid-save:** a `mountedRef` (set in an effect, cleared on cleanup) guards every
   post-await state update and the `onCreated` call, so a save that finishes after the user left
   completes its database write but changes nothing on screen.
-- The editor spans the full window width (user request; it replaced the centered, Google
+- The editor spans the full width of its column (the window, minus the sidebar while it shows) (user request; it replaced the centered, Google
   Docs–style page): white, text inset 3rem left/right (1.25rem under 816px wide; the left inset
   grows while [line numbers](#line-numbers) show), and at least as tall as the window below the
   header, so clicking anywhere under the text focuses it.
@@ -359,7 +360,8 @@ Behavior:
 
 - `NoteEditor` renders `<Toolbar editor={editor} />` under `TopBar`, only once `useEditor` has
   returned an editor (the prop is a non-null `Editor`). One `.editor-header` wrapper holds both
-  rows and is the only sticky element.
+  rows and is the only sticky element in the note column (the [sidebar](#notes-sidebar) beside it
+  sticks on its own).
 - Each button runs `editor.chain().focus().<command>().run()` and cancels `mousedown`, so focus
   and selection stay in the editor. When a button is activated from the keyboard (Enter/Space,
   `event.detail === 0`) it runs without `.focus()`, so focus stays on the toolbar and the next
