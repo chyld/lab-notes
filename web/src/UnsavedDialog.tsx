@@ -17,10 +17,12 @@ type Props = {
  */
 export function UnsavedDialog({ title, saving, onSave, onDiscard, onCancel }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
+  const keepEditingRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const dialog = ref.current;
     if (dialog && !dialog.open) dialog.showModal();
+    keepEditingRef.current?.focus(); // explicitly: browsers differ on a modal's first focus
   }, []);
 
   return createPortal(
@@ -30,8 +32,8 @@ export function UnsavedDialog({ title, saving, onSave, onDiscard, onCancel }: Pr
       aria-labelledby="unsaved-title"
       aria-describedby="unsaved-text"
       onCancel={(event) => {
-        event.preventDefault(); // Esc: we close it by staying
-        onCancel();
+        event.preventDefault(); // Esc: we close it by staying (not while a save is running)
+        if (!saving) onCancel();
       }}
     >
       <h2 id="unsaved-title">Unsaved changes</h2>
@@ -39,10 +41,11 @@ export function UnsavedDialog({ title, saving, onSave, onDiscard, onCancel }: Pr
         “{title}” has changes you haven't saved. Save them before you go?
       </p>
       <div className="unsaved-actions">
-        <button type="button" className="button-quiet" onClick={onCancel}>
+        {/* While a save runs, nothing else can be chosen: its outcome decides. */}
+        <button type="button" className="button-quiet" ref={keepEditingRef} onClick={onCancel} disabled={saving}>
           Keep editing
         </button>
-        <button type="button" className="button-danger" onClick={onDiscard}>
+        <button type="button" className="button-danger" onClick={onDiscard} disabled={saving}>
           Don't save
         </button>
         <button type="button" className="button-primary" onClick={onSave} disabled={saving}>

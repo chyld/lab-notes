@@ -369,9 +369,12 @@ deps would destroy and recreate the editor):
 - **Save button:** a floppy-disk icon button (lucide `Save`, `aria-label`/`title` "Save") at the
   start of the toolbar (user request; it used to be a text button in the top bar). `NoteEditor`
   passes `canSave` (dirty and not saving), `saving`, and `onSave` to `Toolbar`. Disabled when not
-  dirty or while saving. A `savingRef`, set synchronously at
-  the start of a save, also guards `save()`, because the `saving` state only disables the button
-  after React re-renders; two clicks in one tick must not both `POST` (duplicate note). Its label and tooltip read "Saving…" while in flight. Like the other toolbar buttons it cancels
+  dirty or while saving. An in-flight promise ref, set
+  synchronously when a save starts, also guards `save()` (the `saving` state only disables the
+  button after React re-renders): a second `save()` while one runs returns that same promise, so
+  two clicks in one tick never both `POST` (duplicate note), and the leave dialog can wait for it.
+  `save()` resolves to whether it worked; a `savedVersionRef` mirrors `savedVersion` so "dirty
+  right now" can be read from refs. Its label and tooltip read "Saving…" while in flight. Like the other toolbar buttons it cancels
   `mousedown`, so clicking it keeps focus (and the selection) in the editor; a tag typed in the tag
   input but not yet added is still saved, because `save()` adds it first. A
   failure shows the `ApiError` message and re-enables Save; the content stays in the editor. Sends
@@ -928,13 +931,21 @@ to leave it, the app warns first.
   `document.body`, so it's never inside the inert column behind the narrow overlay) titled
   "Unsaved changes": "“<title>” has changes you haven't saved. Save them before you go?" (the live
   title from the breadcrumb). Three buttons:
-  - **Keep editing** (quiet; focused first, so a stray Enter stays; Esc does the same) →
-    `blocker.reset()`: nothing changes.
-  - **Don't save** (red text) → `blocker.proceed()`: the edits are discarded.
-  - **Save** (the gradient button; "Saving…" while in flight) → `save({ stay: false })`, then
-    `blocker.proceed()` if it worked, or `blocker.reset()` (the error shows in the top bar) if it
-    didn't. `stay: false` skips the new note → `/notes/<id>` URL change, since the page is leaving
-    anyway; the sidebar still refreshes (`onSaved`).
+  - **Keep editing** (quiet; focused first, so a stray Enter stays; Esc does the same) → stay:
+    nothing changes.
+  - **Don't save** (red text) → proceed: the edits are discarded.
+  - **Save** (the gradient button; "Saving…" while in flight) → `save({ stay: false })`; if a save
+    was already running (a toolbar Save just before the click away) that one is awaited, and if
+    changes were made after it started they're saved too. Then proceed if it worked, or stay (the
+    error shows in the top bar) if it didn't. `stay: false` skips the new note → `/notes/<id>` URL
+    change, since the page is leaving anyway; the sidebar still refreshes (`onSaved`).
+  - While any save runs, all three buttons are disabled and Esc does nothing: the save's outcome
+    decides. A save that finishes while the dialog is open and leaves nothing unsaved (e.g. that
+    toolbar Save) simply proceeds.
+  - Every answer goes through one `settle(go)`: it reads the latest blocker from a ref and answers
+    only once per blocked navigation (react-router rejects a second `proceed`/`reset`).
+  - Keep editing gets focus explicitly when the dialog opens; after Keep editing or Esc the editor
+    gets focus back.
 - **Reload or closing the tab** while dirty: a `beforeunload` listener (registered only while
   dirty) calls `preventDefault()`, so the browser shows its own "Leave site?" prompt (browsers
   don't allow custom text there).

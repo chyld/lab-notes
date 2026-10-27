@@ -1109,7 +1109,7 @@ button.tag-chip:hover {
   color: var(--ink-2);
 }
 
-.button-quiet:hover {
+.button-quiet:hover:not(:disabled) {
   background: var(--hover);
 }
 
@@ -1117,8 +1117,13 @@ button.tag-chip:hover {
   color: var(--danger);
 }
 
-.button-danger:hover {
+.button-danger:hover:not(:disabled) {
   background: #fdecef;
+}
+
+.button-quiet:disabled,
+.button-danger:disabled {
+  opacity: 0.45;
 }
 
 .button-primary:focus-visible,
