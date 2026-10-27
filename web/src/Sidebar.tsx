@@ -123,8 +123,9 @@ export function Sidebar({ currentId, refresh }: Props) {
   const [state, setState] = useState<State>({ status: "loading" });
   // The search box. The sidebar never remounts, so this survives note switches.
   const [query, setQuery] = useState("");
-  // Ids of the notes matching the query; null when the box is blank (or before the first answer).
-  const [results, setResults] = useState<Set<string> | null>(null);
+  // Ids of the notes matching a query, and which query they answer; null when the box is blank
+  // (or before the first answer).
+  const [results, setResults] = useState<{ ids: Set<string>; query: string } | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -154,17 +155,20 @@ export function Sidebar({ currentId, refresh }: Props) {
     }
     let cancelled = false;
     const timer = setTimeout(() => {
-      listNotes(query).then(
-        (notes) => {
-          if (cancelled) return;
-          setResults(new Set(notes.map((note) => note.id)));
-          setSearchError(null);
-        },
-        (err: unknown) => {
-          // Keep the previous results, but say they're not for this search.
-          if (!cancelled) setSearchError(errorMessage(err));
-        },
-      );
+      // Inside the promise, so even a URL that can't be built (a lone surrogate) is a shown error.
+      Promise.resolve()
+        .then(() => listNotes(query))
+        .then(
+          (notes) => {
+            if (cancelled) return;
+            setResults({ ids: new Set(notes.map((note) => note.id)), query });
+            setSearchError(null);
+          },
+          (err: unknown) => {
+            // Keep the previous results, but say they're not for this search.
+            if (!cancelled) setSearchError(errorMessage(err));
+          },
+        );
     }, 200);
     return () => {
       cancelled = true;
@@ -181,24 +185,28 @@ export function Sidebar({ currentId, refresh }: Props) {
   const tokenKey = (token: string) => (token.startsWith("#") ? `#${normalizeTag(token.slice(1))}` : token);
   const hasTag = (tag: string) => tokens.some((token) => tokenKey(token) === `#${tag}`);
   // A tag chip adds its #tag to the search, or removes it (every spelling of it) if it's there.
-  const toggleTag = (tag: string) =>
-    setQuery(
-      (hasTag(tag) ? tokens.filter((token) => tokenKey(token) !== `#${tag}`) : [...tokens, `#${tag}`]).join(" "),
-    );
+  const toggleTag = (tag: string) => {
+    const next = (hasTag(tag) ? tokens.filter((token) => tokenKey(token) !== `#${tag}`) : [...tokens, `#${tag}`]).join(" ");
+    if (next.length <= 500) setQuery(next); // the server's limit; past it, a chip does nothing
+  };
   const notes = state.status === "ready" ? state.notes : [];
   const now = new Date(); // "today"/"yesterday" are judged at render (every refetch re-renders)
   // The open note is always listed, even if it doesn't match, so you can always see where you are
   // (e.g. a new note you just saved while searching).
-  const shown = results ? notes.filter((note) => results.has(note.id) || note.id === currentId) : notes;
-  // "No notes match" is about the search, so it shows even while the open note is listed anyway.
-  const noMatches = results !== null && results.size === 0;
+  // A blank box shows everything at once (not a frame later, when the effect clears `results`).
+  const active = query.trim() ? results : null;
+  const shown = active ? notes.filter((note) => active.ids.has(note.id) || note.id === currentId) : notes;
+  // "No notes match" is about the search, so it shows even while the open note is listed anyway,
+  // but only for the query in the box (not a previous one whose answer is still shown).
+  const noMatches = active !== null && active.ids.size === 0 && active.query === query;
 
   // The narrow overlay closes on Esc wherever focus is (clicking its empty area drops focus to
   // <body>), like a dialog, and hands focus back to Show notes.
   useEffect(() => {
     if (!narrow || !open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      // Not while an IME is composing: that Esc cancels the composition.
+      if (event.key !== "Escape" || event.isComposing) return;
       event.preventDefault();
       setOpen(false);
       focusLater("show-notes");

@@ -11,7 +11,8 @@ export function parseQuery(q: string): Query {
   for (const token of q.split(/\s+/)) {
     if (!token) continue;
     if (token.startsWith("#")) {
-      const prefix = token.slice(1).toLowerCase().replace(/[^a-z0-9]/g, "");
+      // Cleaned like a tag (and cut to a tag's 40 characters), as the sidebar reads it too.
+      const prefix = token.slice(1).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 40);
       if (prefix) query.tagPrefixes.push(prefix);
     } else {
       query.words.push(token.normalize("NFC").toLowerCase());

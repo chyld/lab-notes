@@ -217,7 +217,8 @@ only for search; no response includes it.
 
 **Search:** `GET /api/notes?q=…` (querystring schema: `q` a string of at most 500 characters,
 else 400). `q` is split on whitespace. A token starting with `#` is a tag prefix: lowercased,
-everything but `a-z0-9` dropped (a bare `#` is ignored); a note matches if one of its tags starts
+everything but `a-z0-9` dropped, cut to 40 characters like a tag (so the sidebar's chips read it
+the same way); a note matches if one of its tags starts
 with it. Any other token is a word: a note matches if its `body` contains it (the body starts
 with the title line, so titles are searched too; the `Untitled` placeholder is not text and never
 matches), case-insensitively (both sides `toLowerCase()`), anywhere (substring, so `prox` matches
@@ -832,23 +833,27 @@ magnifier icon (`aria-hidden`), `aria-label="Search notes"`, placeholder `Search
   must match. So `proxmox #homelab` lists notes tagged `homelab…` that mention proxmox.
 - **Tag chips** in the list toggle their `#tag` token in the box: clicking adds it (keeping what's
   already typed), clicking again removes it. Tokens are compared as the search reads them, so
-  `#Home` counts as `#home` (pressed, and removed with every duplicate). This replaced the
-  separate tag filter.
+  `#Home` counts as `#home` (pressed, and removed with every duplicate). A click that would make
+  the search longer than 500 characters does nothing. This replaced the separate tag filter.
 - **Requests:** typing waits 200ms after the last keystroke, then fetches `listNotes(q)`; the
   sidebar also re-runs the search when the list refreshes (after a save, or switching notes). A
   superseded request's answer is ignored (effect cleanup), so an older response never overwrites a
   newer one. Until the first answer for a non-blank box the full list shows; after that, while a
   search is in flight, the previous results stay. A failed search keeps them but says
-  "Couldn't search: …" (`role="alert"`) until a search succeeds or the box is cleared. Clearing
+  "Couldn't search: …" (`role="alert"`) until a search succeeds or the box is cleared. (The
+  request is built inside the promise chain, so even a query that can't be URL-encoded, like a
+  lone surrogate from a broken paste, is shown this way.) Clearing
   the box shows the full list at once (no debounce).
 - **Showing results:** the sidebar keeps the full list (as before) and the set of matching ids;
   while the box is non-blank it lists the full list's notes that matched, in the same order, plus
   the open note whether or not it matched (so you always see where you are, e.g. a new note you
   just saved while searching). If nothing matched, it says "No notes match" (`role="status"`),
-  even while the open note is listed below it. Blank box → the full list.
+  even while the open note is listed below it, but only while the box still holds the query that
+  answer is for (not while the next search is on its way). Blank box → the full list.
 - **Esc** in a non-empty box clears it (handled by the input itself, not left to the browser, and
   not while an IME is composing); the key stops there, so on narrow screens it doesn't also close
-  the overlay. Esc in an empty box closes the narrow overlay as before.
+  the overlay. Esc in an empty box closes the narrow overlay as before. The overlay's own Esc
+  handler ignores an Esc that cancels an IME composition.
 - The search is the sidebar's own state (the sidebar never remounts): it survives switching
   notes, but not a reload.
 
