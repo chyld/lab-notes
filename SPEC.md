@@ -11,9 +11,11 @@ In scope, and nothing else:
 2. **Note editor**: edits one note in Tiptap and saves it **only when the Save button is clicked**.
 3. **Title**: the note's title is its **first line**.
 4. **Packaging**: one Docker image, run with Docker Compose, data on a persistent volume.
+5. **Formatting toolbar** (added by user request): a Google Docs–style toolbar over the editor
+   for the formatting StarterKit already supports. See [Toolbar](#toolbar).
 
 Out of scope (the user will decide later): delete, autosave, unsaved-changes warnings, keyboard
-save shortcut, formatting toolbar, search, folders, sharing, auth, real-time collaboration,
+save shortcut, search, folders, sharing, auth, real-time collaboration,
 version history, dates or previews in the list, images/uploads.
 
 ## Stack
@@ -28,6 +30,7 @@ version history, dates or previews in the list, images/uploads.
 | Routing | `react-router@^8`, declarative mode (`BrowserRouter`, `Routes`, `Route`) | Two routes, plus a catch-all "Page not found". |
 | Types | `typescript@^7`, `@types/node@^26`, `@types/react@^19`, `@types/react-dom@^19` | `npm run typecheck`. |
 | Styling | One plain CSS file | No UI framework. |
+| Icons | `lucide-react@^1` (devDependency; tree-shaken into the bundle) | Toolbar icons. |
 | Tests | `node:test` (built in) | Server title logic and API. |
 
 The lockfile is the source of truth for exact versions.
@@ -67,6 +70,7 @@ web/
     NotesList.tsx           # route "/"
     NotePage.tsx            # route "/notes/:id" (id may be "new"): loading
     NoteEditor.tsx          # the Tiptap editor and Save
+    Toolbar.tsx             # formatting toolbar for the editor
     TopBar.tsx              # "← Lab Notes" bar shared by the note screens
     styles.css
 ```
@@ -245,12 +249,65 @@ deps would destroy and recreate the editor):
   completes its database write but changes nothing on screen.
 - The editor is styled as a centered white page on a gray background, Google Docs–like.
 - Unmatched client routes render "Page not found." with a link back to the list.
-- Formatting comes from StarterKit's keyboard shortcuts and Markdown-style input rules (`# `
-  heading, `- ` list, `Ctrl+B` bold). No toolbar.
+- Formatting comes from the [toolbar](#toolbar) and from StarterKit's keyboard shortcuts and
+  Markdown-style input rules (`# ` heading, `- ` list, `Ctrl+B` bold), which keep working.
 
 StarterKit v3 defaults include `Link` (autolinks pasted/typed URLs), `Underline`, `ListKeymap`,
 and `TrailingNode` (keeps an empty paragraph at the end of the document, so saved JSON often ends
 with one). These are expected.
+
+### Toolbar
+
+`Toolbar.tsx` renders one row directly under the top bar. The top bar and toolbar stick to the top
+together while the page scrolls. It exposes exactly what StarterKit v3 already supports, in
+Google Docs order, as groups separated by thin dividers:
+
+| Group | Controls |
+|---|---|
+| History | Undo, Redo |
+| Block style | A `<select>`: Normal text, Heading 1, Heading 2, Heading 3, Heading 4, Heading 5, Heading 6 |
+| Marks | Bold, Italic, Underline, Strikethrough, Inline code |
+| Link | Link |
+| Lists | Bulleted list, Numbered list |
+| Blocks | Quote, Code block, Horizontal line |
+| Clear | Clear formatting |
+
+Nothing else: no font family/size, colors, highlight, alignment, indent buttons, images, tables, or
+anything StarterKit does not include.
+
+Behavior:
+
+- Each button runs `editor.chain().focus().<command>().run()`, so focus and selection return to
+  the editor. Commands: `undo`, `redo`, `toggleBold`, `toggleItalic`, `toggleUnderline`,
+  `toggleStrike`, `toggleCode`, `toggleBulletList`, `toggleOrderedList`, `toggleBlockquote`,
+  `toggleCodeBlock`, `setHorizontalRule`, and clear formatting = `unsetAllMarks().clearNodes()`.
+- The block-style select shows the current block: `Heading N` when the cursor is in a heading of
+  level N, otherwise `Normal text`. Choosing `Normal text` runs `setParagraph()`; choosing
+  `Heading N` runs `setHeading({ level: N })`. When the selection is in a code block the select
+  shows `Normal text`.
+- **Link:** if the cursor or selection is in a link, the button is pressed. Clicking opens
+  `window.prompt("Link URL", currentHref ?? "https://")`. Cancel does nothing; an empty string
+  removes the link (`extendMarkRange("link").unsetLink()`); otherwise
+  `extendMarkRange("link").setLink({ href })`. Tiptap's `setLink` already refuses unsafe URLs
+  (e.g. `javascript:`) via `isAllowedUri`; when it refuses, nothing changes. The button is
+  disabled when the selection is empty and not inside a link (there is no text to link).
+- **State:** toolbar state comes from Tiptap's `useEditorState` selector, so the toolbar
+  re-renders on selection and content changes. Mark, list, quote, and code-block buttons show
+  pressed state (`aria-pressed`) from `editor.isActive(...)`. Undo, Redo, and each mark/list/block
+  button are disabled when `editor.can()` says the command can't run (e.g. Undo with no history).
+- **Dirty tracking** needs no change: toolbar commands change the document, which fires
+  `onUpdate`, which enables Save.
+- **Accessibility:** the row is `role="toolbar"` with `aria-label="Formatting"`. Every button
+  has an `aria-label` and a `title` tooltip that includes its shortcut, e.g. "Bold (Ctrl+B)",
+  showing `⌘` instead of `Ctrl` on macOS.
+- **Look:** Google Docs–like. Icon buttons (lucide icons, 18px) in a light gray rounded bar.
+  Hover is a slightly darker gray; pressed is light blue (`#d3e3fd`) with a blue icon
+  (`#0b57d0`); disabled is faded. On narrow screens the row scrolls horizontally rather than
+  wrapping.
+- Shortcuts shown in tooltips: Undo `Ctrl+Z`, Redo `Ctrl+Shift+Z`, Bold `Ctrl+B`, Italic `Ctrl+I`,
+  Underline `Ctrl+U`, Strikethrough `Ctrl+Shift+S`, Inline code `Ctrl+E`, Bulleted list
+  `Ctrl+Shift+8`, Numbered list `Ctrl+Shift+7`, Quote `Ctrl+Shift+B`, Code block `Ctrl+Alt+C`.
+  (These are StarterKit's own bindings; the toolbar adds none.)
 
 ## Branding
 
@@ -340,3 +397,6 @@ they never touch `./data`.
 8. `npm run typecheck` and `npm test` pass.
 9. API errors are `{ error }` JSON; `POST /anything`, unknown `/api/*`, and missing files are
    JSON 404s.
+10. Toolbar: each control applies its formatting to the selection, shows pressed state where the
+    cursor is, keeps focus in the editor, and enables Save; Undo/Redo are disabled when there is
+    nothing to undo/redo; the block-style select reflects and changes the current block.
