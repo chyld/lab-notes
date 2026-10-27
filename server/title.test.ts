@@ -70,3 +70,14 @@ test("handles very deep and very wide input without overflowing the stack", () =
   const wide = Array.from({ length: 300_000 }, () => ({ type: "horizontalRule" }));
   assert.equal(extractTitle(doc({ type: "blockquote", content: [...wide, p(text("after"))] })), "after");
 });
+
+test("skips a leading image", () => {
+  const doc = {
+    type: "doc",
+    content: [
+      { type: "image", attrs: { src: "/api/images/abc", width: 200, height: 100 } },
+      { type: "paragraph", content: [{ type: "text", text: "Caption line" }] },
+    ],
+  };
+  assert.equal(extractTitle(doc), "Caption line");
+});

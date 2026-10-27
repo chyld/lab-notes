@@ -23,12 +23,16 @@ export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  return send<T>(path, {
     method,
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+}
+
+async function send<T>(path: string, init: RequestInit): Promise<T> {
+  const res = await fetch(path, init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -50,3 +54,9 @@ export const listNotes = () => request<NoteSummary[]>("GET", "/api/notes");
 export const getNote = (id: string) => request<Note>("GET", notePath(id));
 export const createNote = (content: JSONContent) => request<Note>("POST", "/api/notes", { content });
 export const updateNote = (id: string, content: JSONContent) => request<Note>("PUT", notePath(id), { content });
+
+/** Stores the image's bytes; resolves to its URL (`/api/images/<sha256>`). */
+export const uploadImage = (file: Blob) =>
+  send<{ url: string }>("/api/images", { method: "POST", headers: { "Content-Type": file.type }, body: file }).then(
+    (res) => res.url,
+  );

@@ -17,8 +17,10 @@ import {
 } from "lucide-react";
 import { FontPicker } from "./FontPicker.tsx";
 import { FontSizeControl, sizeAtSelection } from "./FontSizeControl.tsx";
-import { textStyleAt } from "./editor.ts";
+import { HighlightPicker } from "./HighlightPicker.tsx";
+import { markAt, textStyleAt } from "./editor.ts";
 import { primaryFamily } from "./fonts.ts";
+import { DEFAULT_HIGHLIGHT } from "./highlights.ts";
 import { Divider, Tool } from "./ToolButton.tsx";
 
 type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
@@ -72,6 +74,12 @@ export function Toolbar({ editor }: { editor: Editor }) {
       canFont: editor.can().setFontFamily("serif"),
       fontSize: sizeAtSelection(editor),
       canFontSize: editor.can().setFontSize("12pt"),
+      // A highlight with no color (Ctrl+Shift+H, ==text==) shows as the default Yellow.
+      highlight: (() => {
+        const mark = markAt(editor, "highlight");
+        return mark ? ((mark.attrs.color as string | null) ?? DEFAULT_HIGHLIGHT) : null;
+      })(),
+      canHighlight: editor.can().setHighlight({ color: DEFAULT_HIGHLIGHT }),
     }),
   });
 
@@ -152,6 +160,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
         <Tool icon={Underline} label="Underline" keys="Mod+U" onClick={(k) => chain(k).toggleUnderline().run()} active={state.underline} disabled={!state.canUnderline} />
         <Tool icon={Strikethrough} label="Strikethrough" keys="Mod+Shift+S" onClick={(k) => chain(k).toggleStrike().run()} active={state.strike} disabled={!state.canStrike} />
         <Tool icon={Code} label="Inline code" keys="Mod+E" onClick={(k) => chain(k).toggleCode().run()} active={state.code} disabled={!state.canCode} />
+        <HighlightPicker editor={editor} current={state.highlight} disabled={!state.canHighlight} />
         <Divider />
         <Tool
           icon={LinkIcon}

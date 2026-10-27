@@ -12,6 +12,13 @@ export type NoteRow = {
 
 export type NoteListRow = Pick<NoteRow, "id" | "title">;
 
+export type ImageRow = {
+  id: string;
+  type: string;
+  data: Uint8Array;
+  created_at: string;
+};
+
 export type Db = ReturnType<typeof openDb>;
 
 export function openDb(path: string) {
@@ -27,6 +34,12 @@ export function openDb(path: string) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS images (
+      id         TEXT PRIMARY KEY,
+      type       TEXT NOT NULL,
+      data       BLOB NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
 
   // rowid breaks ties between saves in the same millisecond (latest insert first).
@@ -36,6 +49,9 @@ export function openDb(path: string) {
     "INSERT INTO notes (id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
   );
   const update = db.prepare("UPDATE notes SET title = ?, content = ?, updated_at = ? WHERE id = ?");
+  // Ids are content hashes, so an existing row already holds these exact bytes.
+  const insertImage = db.prepare("INSERT OR IGNORE INTO images (id, type, data, created_at) VALUES (?, ?, ?, ?)");
+  const getImage = db.prepare("SELECT * FROM images WHERE id = ?");
 
   return {
     listNotes: () => list.all() as NoteListRow[],
@@ -46,6 +62,10 @@ export function openDb(path: string) {
     /** Returns false when no note has this id. */
     updateNote: (id: string, title: string, content: string, updatedAt: string) =>
       update.run(title, content, updatedAt, id).changes > 0,
+    insertImage: (row: ImageRow) => {
+      insertImage.run(row.id, row.type, row.data, row.created_at);
+    },
+    getImage: (id: string) => getImage.get(id) as ImageRow | undefined,
     close: () => db.close(),
   };
 }

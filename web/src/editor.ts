@@ -1,7 +1,41 @@
-import { getSchema, type ChainedCommands, type Editor } from "@tiptap/react";
+import { getSchema, type ChainedCommands, type Editor, type ResizableNodeView } from "@tiptap/react";
+import type { Mark } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import { FontFamily, FontSize, TextStyle } from "@tiptap/extension-text-style";
+import Highlight from "@tiptap/extension-highlight";
+import Image from "@tiptap/extension-image";
 import { catalogFamilies, loadFont, primaryFamily } from "./fonts.ts";
+import { DEFAULT_HIGHLIGHT } from "./highlights.ts";
+import { ImagePaste } from "./imagePaste.ts";
+
+// Ctrl+Shift+H toggles Yellow explicitly. Tiptap's colorless toggle would merge in the color of the
+// highlight around the cursor (even one just removed with "None").
+const YellowShortcutHighlight = Highlight.extend({
+  addKeyboardShortcuts() {
+    return { "Mod-Shift-h": () => this.editor.commands.toggleHighlight({ color: DEFAULT_HIGHLIGHT }) };
+  },
+});
+
+// Tiptap's resizable image view ignores width/height changes it didn't make itself, so undoing or
+// redoing a resize would leave the old size on screen. Apply them on every update.
+const ResizableImage = Image.extend({
+  addNodeView() {
+    const create = this.parent?.();
+    if (!create) return null;
+    return (props) => {
+      const view = create(props) as ResizableNodeView;
+      const update = view.update.bind(view);
+      view.update = (node, decorations, innerDecorations) => {
+        if (!update(node, decorations, innerDecorations)) return false;
+        const { width, height } = node.attrs as { width: number | null; height: number | null };
+        view.element.style.width = width ? `${width}px` : "";
+        view.element.style.height = height ? `${height}px` : "";
+        return true;
+      };
+      return view;
+    };
+  },
+});
 
 // StarterKit defaults, except a plain click on a link places the cursor (so the toolbar can edit
 // it) instead of opening it in a new tab. TextStyle carries font family and size.
@@ -10,6 +44,17 @@ export const extensions = [
   TextStyle,
   FontFamily,
   FontSize,
+  YellowShortcutHighlight.configure({ multicolor: true }),
+  ResizableImage.configure({
+    resize: {
+      enabled: true,
+      directions: ["top-left", "top-right", "bottom-left", "bottom-right"],
+      minWidth: 32,
+      minHeight: 32,
+      alwaysPreserveAspectRatio: true,
+    },
+  }),
+  ImagePaste,
 ];
 
 const schema = getSchema(extensions);
@@ -25,17 +70,22 @@ export function isValidContent(content: unknown): boolean {
 }
 
 /**
- * textStyle attributes at the start of the selection, or queued for typing at a cursor.
- * (editor.getAttributes() returns the first textStyle anywhere in a range, and at a cursor ignores
+ * The mark of this type at the start of the selection, or queued for typing at a cursor.
+ * (editor.getAttributes() returns the first mark anywhere in a range, and at a cursor ignores
  * stored marks that were explicitly cleared.)
  */
-export function textStyleAt(editor: Editor): Record<string, unknown> {
+export function markAt(editor: Editor, name: string): Mark | undefined {
   const { state } = editor;
   const { selection } = state;
   const marks = selection.empty
     ? (state.storedMarks ?? selection.$from.marks())
     : (state.doc.nodeAt(selection.from)?.marks ?? selection.$from.marks());
-  return marks.find((mark) => mark.type.name === "textStyle")?.attrs ?? {};
+  return marks.find((mark) => mark.type.name === name);
+}
+
+/** textStyle attributes (font family/size) at the selection; see markAt. */
+export function textStyleAt(editor: Editor): Record<string, unknown> {
+  return markAt(editor, "textStyle")?.attrs ?? {};
 }
 
 /**

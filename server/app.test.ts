@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.ts";
+import { MAX_IMAGE_BYTES } from "./images.ts";
 
 const doc = (first: string) => ({
   type: "doc",
@@ -203,5 +205,101 @@ test("a static dir without index.html serves no SPA fallback", async (t) => {
     const res = await web.inject({ method: "GET", url });
     assert.equal(res.statusCode, 404, url);
     assert.deepEqual(res.json(), { error: "Not found" });
+  }
+});
+
+// A real 1×1 PNG.
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+function upload(payload: Buffer, type = "image/png") {
+  return app.inject({ method: "POST", url: "/api/images", headers: { "content-type": type }, payload });
+}
+
+test("uploads an image and serves it back", async () => {
+  const res = await upload(png);
+  assert.equal(res.statusCode, 201);
+  const hash = createHash("sha256").update(png).digest("hex");
+  assert.deepEqual(res.json(), { url: `/api/images/${hash}` });
+
+  const got = await app.inject({ method: "GET", url: res.json().url });
+  assert.equal(got.statusCode, 200);
+  assert.deepEqual(got.rawPayload, png);
+  assert.equal(got.headers["content-type"], "image/png");
+  assert.equal(got.headers["cache-control"], "public, max-age=31536000, immutable");
+  assert.equal(got.headers["x-content-type-options"], "nosniff");
+  assert.equal(got.headers["content-security-policy"], "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+
+  const head = await app.inject({ method: "HEAD", url: res.json().url });
+  assert.equal(head.statusCode, 200);
+  assert.equal(head.headers["content-type"], "image/png");
+});
+
+test("stores the same image once", async () => {
+  const first = (await upload(png)).json();
+  const second = await upload(png);
+  assert.equal(second.statusCode, 201);
+  assert.deepEqual(second.json(), first);
+});
+
+test("detects the image type from its bytes, not the header", async () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+  const gif = Buffer.from("GIF89a-rest");
+  const webp = Buffer.concat([Buffer.from("RIFF"), Buffer.from([1, 0, 0, 0]), Buffer.from("WEBPVP8 ")]);
+  for (const [bytes, type] of [[jpeg, "image/jpeg"], [gif, "image/gif"], [webp, "image/webp"], [png, "image/png"]] as const) {
+    const res = await upload(bytes, "image/webp"); // deliberately the wrong header for most
+    assert.equal(res.statusCode, 201);
+    const got = await app.inject({ method: "GET", url: res.json().url });
+    assert.equal(got.headers["content-type"], type);
+  }
+});
+
+test("rejects bytes that aren't a supported image", async () => {
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+  for (const payload of [svg, Buffer.from("not an image"), Buffer.from("RIFF0000WAVE")]) {
+    const res = await upload(payload);
+    assert.equal(res.statusCode, 415);
+    assert.deepEqual(res.json(), { error: "Unsupported image type" });
+  }
+});
+
+test("rejects an empty image", async () => {
+  const res = await upload(Buffer.alloc(0));
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(res.json(), { error: "Image is empty" });
+});
+
+test("rejects images over 25 MiB with 413", async () => {
+  const big = Buffer.concat([png, Buffer.alloc(MAX_IMAGE_BYTES + 1 - png.length)]);
+  const res = await upload(big);
+  assert.equal(res.statusCode, 413);
+  assert.equal(typeof res.json().error, "string");
+  const ok = await upload(Buffer.concat([png, Buffer.alloc(MAX_IMAGE_BYTES - png.length)]));
+  assert.equal(ok.statusCode, 201);
+});
+
+test("image content types are only parsed by the upload route", async () => {
+  const note = await app.inject({ method: "POST", url: "/api/notes", headers: { "content-type": "image/png" }, payload: png });
+  assert.equal(note.statusCode, 415);
+  // Any image/* (or untyped bytes) reaches detection, which decides.
+  const svg = await upload(Buffer.from("<svg/>"), "image/svg+xml");
+  assert.equal(svg.statusCode, 415);
+  assert.deepEqual(svg.json(), { error: "Unsupported image type" });
+  const avif = await upload(Buffer.from("....ftypavif"), "image/avif");
+  assert.deepEqual(avif.json(), { error: "Unsupported image type" });
+  const untyped = await upload(png, "application/octet-stream");
+  assert.equal(untyped.statusCode, 201);
+  const json = await app.inject({ method: "POST", url: "/api/images", payload: { a: 1 } });
+  assert.equal(json.statusCode, 415);
+  assert.equal(typeof json.json().error, "string");
+});
+
+test("unknown or malformed image ids are JSON 404s", async () => {
+  for (const id of ["0".repeat(64), "abc", "A".repeat(64), "..%2Fnotes.db"]) {
+    const res = await app.inject({ method: "GET", url: `/api/images/${id}` });
+    assert.equal(res.statusCode, 404, id);
+    assert.deepEqual(res.json(), { error: "Image not found" });
   }
 });

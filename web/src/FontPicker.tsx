@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/react";
 import { setTextStyle } from "./editor.ts";
@@ -12,6 +12,7 @@ import {
   type CatalogFont,
   type FontCategory,
 } from "./fonts.ts";
+import { useDismiss, usePopoverPosition } from "./popover.ts";
 
 const POPOVER_WIDTH = 300;
 
@@ -75,10 +76,8 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
-  const [position] = useState(() => {
-    const rect = anchor.getBoundingClientRect();
-    return { top: rect.bottom + 4, left: Math.max(8, Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 8)) };
-  });
+  const position = usePopoverPosition(anchor, POPOVER_WIDTH);
+  const onBlur = useDismiss(popoverRef, anchor, onClose);
 
   useEffect(() => {
     let alive = true;
@@ -90,24 +89,6 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
       alive = false;
     };
   }, []);
-
-  // Close on a click outside (the button toggles itself), a resize, or an element scrolling outside
-  // the popover (the toolbar scrolling sideways would leave the fixed popover behind). Page scrolls
-  // are fine: the header is sticky, so the button doesn't move.
-  useEffect(() => {
-    const outside = (target: EventTarget | null) =>
-      !popoverRef.current?.contains(target as Node) && !anchor.contains(target as Node);
-    const onPointerDown = (event: PointerEvent) => outside(event.target) && onClose();
-    const onScroll = (event: Event) => event.target !== document && outside(event.target) && onClose();
-    window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("resize", onClose);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("resize", onClose);
-    };
-  }, [anchor, onClose]);
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -154,12 +135,6 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
   const applyRef = useRef(apply);
   applyRef.current = apply;
   const pick = useCallback((font: CatalogFont | null) => applyRef.current(font), []);
-
-  // Keyboard focus leaving the popover (e.g. Tab past the chips) closes it.
-  function onBlur(event: FocusEvent) {
-    const next = event.relatedTarget as Node | null;
-    if (!popoverRef.current?.contains(next) && !anchor.contains(next)) onClose();
-  }
 
   function onKeyDown(event: KeyboardEvent) {
     if (event.key === "Escape") {

@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import Fastify, { LogController, type FastifyError, type FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
 import { openDb, type NoteRow } from "./db.ts";
+import { detectImageType, IMAGE_CONTENT_TYPES, MAX_IMAGE_BYTES } from "./images.ts";
 import { extractTitle } from "./title.ts";
 
 export type AppOptions = {
@@ -54,6 +55,8 @@ function exceedsMaxDepth(value: unknown): boolean {
 }
 
 const tooDeep = { error: "Document is nested too deeply" };
+
+const IMAGE_ID = /^[0-9a-f]{64}$/;
 
 function toNote(row: NoteRow) {
   return {
@@ -139,6 +142,41 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
       return toNote(db.getNote(id)!);
     },
   );
+
+  // Image bytes are parsed only inside this plugin, so other routes still answer 415 to them.
+  app.register(async (images) => {
+    for (const contentType of IMAGE_CONTENT_TYPES) {
+      images.addContentTypeParser(
+        contentType,
+        { parseAs: "buffer", bodyLimit: MAX_IMAGE_BYTES },
+        (_request, body, done) => done(null, body),
+      );
+    }
+
+    images.post("/api/images", { bodyLimit: MAX_IMAGE_BYTES }, async (request, reply) => {
+      const bytes = request.body as Buffer | undefined;
+      if (!bytes || bytes.length === 0) return reply.code(400).send({ error: "Image is empty" });
+      const type = detectImageType(bytes);
+      if (!type) return reply.code(415).send({ error: "Unsupported image type" });
+      const id = createHash("sha256").update(bytes).digest("hex");
+      db.insertImage({ id, type, data: bytes, created_at: new Date().toISOString() });
+      return reply.code(201).send({ url: `/api/images/${id}` });
+    });
+  });
+
+  app.get<{ Params: IdParams }>("/api/images/:id", { schema: { params: idParams } }, async (request, reply) => {
+    const { id } = request.params;
+    const row = IMAGE_ID.test(id) ? db.getImage(id) : undefined;
+    if (!row) return reply.code(404).send({ error: "Image not found" });
+    return reply
+      .header("Content-Type", row.type)
+      // An id is the hash of its bytes, so they never change.
+      .header("Cache-Control", "public, max-age=31536000, immutable")
+      .header("X-Content-Type-Options", "nosniff")
+      // Only raster types are ever stored; this is defense in depth if one is opened directly.
+      .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+      .send(Buffer.from(row.data.buffer, row.data.byteOffset, row.data.byteLength));
+  });
 
   return app;
 }
