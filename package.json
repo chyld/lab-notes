@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.web.json && tsc -p tsconfig.server.json",
     "test": "node --test server/",
     "start": "node server/index.ts",
+    "users": "node server/users.ts",
     "fonts:update": "node scripts/update-google-fonts.ts"
   },
   "dependencies": {

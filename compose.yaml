@@ -5,6 +5,8 @@ services:
     build: .
     ports:
       - "${PORT:-5555}:5555"
+    environment:
+      TRUST_PROXY: "${TRUST_PROXY:-}"
     volumes:
       - data:/data
     restart: unless-stopped

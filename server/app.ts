@@ -1,9 +1,22 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import Fastify, { LogController, type FastifyError, type FastifyReply } from "fastify";
+import Fastify, { LogController, type FastifyError, type FastifyReply, type FastifyRequest } from "fastify";
 import fastifyStatic from "@fastify/static";
-import { openDb, type NoteListRow, type NoteRow } from "./db.ts";
+import {
+  dummyPasswordHash,
+  expiryCutoff,
+  hashToken,
+  newSessionToken,
+  normalizeUsername,
+  readSessionCookie,
+  sessionAlive,
+  sessionCookie,
+  sessionStale,
+  SignInLimiter,
+  verifyPassword,
+} from "./auth.ts";
+import { openDb, type Db, type NoteListRow, type NoteRow } from "./db.ts";
 import { detectImageType, IMAGE_CONTENT_TYPES, MAX_IMAGE_BYTES } from "./images.ts";
 import { isEmptyQuery, matchesQuery, parseQuery } from "./search.ts";
 import { extractText, extractTitle } from "./title.ts";
@@ -12,7 +25,36 @@ export type AppOptions = {
   dbPath: string;
   staticDir?: string;
   logger?: boolean;
+  /** The reverse proxy's addresses (TRUST_PROXY): only they're believed about X-Forwarded-*. */
+  trustProxy?: string;
 };
+
+declare module "fastify" {
+  interface FastifyInstance {
+    /** The app's database (tests create accounts through it). */
+    db: Db;
+  }
+}
+
+/** Who a request is signed in as. */
+type SessionUser = { id: string; username: string };
+
+const SIGNED_OUT = "You're signed out. Sign in again in another tab, then try again here.";
+const OTHER_USER = "Someone else signed in on this browser. Reload this page.";
+const WRONG_CREDENTIALS = "Wrong username or password";
+const TOO_MANY = "Too many sign-in attempts. Try again in a few minutes.";
+
+// The only /api paths that don't need a session.
+const PUBLIC_API = new Set(["/api/auth/status", "/api/auth/login", "/api/auth/logout"]);
+
+const loginBody = {
+  type: "object",
+  required: ["username", "password"],
+  properties: {
+    username: { type: "string", minLength: 1, maxLength: 100 },
+    password: { type: "string", minLength: 1, maxLength: 1024 },
+  },
+} as const;
 
 // Lowercase letters and digits only, unique within the note (see SPEC "Tags").
 const tagsSchema = {
@@ -94,9 +136,10 @@ function toNote(row: NoteRow) {
   };
 }
 
-export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
+export function buildApp({ dbPath, staticDir, logger = false, trustProxy }: AppOptions) {
   const app = Fastify({
     logger,
+    trustProxy: trustProxy || false,
     logController: new LogController({ disableRequestLogging: true }),
     // Raw (still %-encoded) length: a 100-character family name with spaces is longer encoded.
     routerOptions: { maxParamLength: 300 },
@@ -107,7 +150,53 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
     },
   });
   const db = openDb(dbPath);
+  app.decorate("db", db);
   app.addHook("onClose", async () => db.close());
+  db.deleteExpiredSessions(expiryCutoff(Date.now()));
+
+  // Sessions (see SPEC "Accounts and sign-in"). Over plain http on the LAN a Secure cookie would be
+  // dropped, so it's only Secure over https (as reported by a trusted proxy, if any).
+  const secure = (request: FastifyRequest) => request.protocol === "https";
+
+  /** The request's signed-in user, re-stamping (and re-sending) a session last seen over an hour ago. */
+  function sessionFor(request: FastifyRequest, reply: FastifyReply): SessionUser | null {
+    const token = readSessionCookie(request.headers.cookie);
+    if (!token) return null;
+    const tokenHash = hashToken(token);
+    const row = db.getSession(tokenHash);
+    if (!row) return null;
+    const now = Date.now();
+    if (!sessionAlive(row.last_seen_at, now)) {
+      db.deleteSession(tokenHash);
+      return null;
+    }
+    if (sessionStale(row.last_seen_at, now)) {
+      db.touchSession(tokenHash, new Date(now).toISOString());
+      reply.header("Set-Cookie", sessionCookie(token, secure(request)));
+    }
+    return { id: row.user_id, username: row.username };
+  }
+
+  const users = new WeakMap<FastifyRequest, SessionUser>();
+  /** The signed-in user (the hook below has already turned everyone else away). */
+  const userOf = (request: FastifyRequest) => users.get(request)!;
+
+  // Every /api request but the three auth ones needs a session: checked first thing (before body
+  // parsing and validation), and for unknown /api paths too. Pages and files never do.
+  app.addHook("onRequest", async (request, reply) => {
+    const path = request.url.split("?", 1)[0];
+    if (!path.startsWith("/api/")) return;
+    reply.header("Cache-Control", "no-store"); // Back after signing out can't show cached notes
+    if (PUBLIC_API.has(path)) return;
+    const user = sessionFor(request, reply);
+    if (!user) return reply.code(401).send({ error: SIGNED_OUT });
+    // A tab signed in as someone else (the cookie changed under it): refuse before anything.
+    const expected = request.headers["x-lab-notes-user"];
+    if (typeof expected === "string" && expected !== user.username) {
+      return reply.code(409).send({ error: OTHER_USER });
+    }
+    users.set(request, user);
+  });
 
   app.setErrorHandler((err: FastifyError, request, reply) => {
     const status = err.statusCode ?? 500;
@@ -136,6 +225,53 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
     return reply.code(404).send({ error: "Not found" });
   });
 
+  app.get("/api/auth/status", async (request, reply) => ({
+    username: sessionFor(request, reply)?.username ?? null,
+    hasAccounts: db.countUsers() > 0,
+  }));
+
+  const limiter = new SignInLimiter();
+
+  app.post<{ Body: { username: string; password: string } }>(
+    "/api/auth/login",
+    { schema: { body: loginBody } },
+    async (request, reply) => {
+      const uncount = limiter.begin(request.ip);
+      if (!uncount) return reply.code(429).send({ error: TOO_MANY });
+      const user = db.getUserByName(normalizeUsername(request.body.username));
+      // An unknown username still costs one scrypt, so timing doesn't reveal which ones exist.
+      const ok = await verifyPassword(request.body.password, user?.password_hash ?? (await dummyPasswordHash()));
+      if (!user || !ok) return reply.code(401).send({ error: WRONG_CREDENTIALS });
+      uncount();
+      // A session this browser already had is replaced, not kept alongside.
+      const previous = readSessionCookie(request.headers.cookie);
+      if (previous) db.deleteSession(hashToken(previous));
+      const { token, hash } = newSessionToken();
+      db.insertSession(hash, user.id, new Date().toISOString());
+      reply.header("Set-Cookie", sessionCookie(token, secure(request)));
+      return { username: user.username };
+    },
+  );
+
+  // Signing out is a real form post (the page reloads), so form bodies are accepted here only.
+  app.register(async (auth) => {
+    auth.addContentTypeParser(
+      "application/x-www-form-urlencoded",
+      { parseAs: "string", bodyLimit: 1024 },
+      (_request, _body, done) => done(null, {}),
+    );
+    auth.post("/api/auth/logout", async (request, reply) => {
+      // Only a request that brought the cookie clears it: a cross-site form post arrives without
+      // the (SameSite=Lax) cookie, and mustn't be able to sign anyone out.
+      const token = readSessionCookie(request.headers.cookie);
+      if (token) {
+        db.deleteSession(hashToken(token));
+        reply.header("Set-Cookie", sessionCookie(null, secure(request)));
+      }
+      return reply.code(303).header("Location", "/").send();
+    });
+  });
+
   const toSummary = (row: NoteListRow) => ({
     id: row.id,
     title: row.title,
@@ -145,10 +281,12 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
 
   // ?q= searches (see SPEC "Search"); blank or absent lists every note.
   app.get<{ Querystring: { q?: string } }>("/api/notes", { schema: { querystring: listQuery } }, async (request) => {
+    const owner = userOf(request).id;
     const query = parseQuery(request.query.q ?? "");
-    if (isEmptyQuery(query)) return db.listNotes().map(toSummary);
+    if (isEmptyQuery(query)) return db.listNotes(owner).map(toSummary);
     // Only word searches need every note's text; tag-only searches use the plain list.
-    const rows = query.words.length > 0 ? db.searchableNotes() : db.listNotes().map((row) => ({ ...row, body: "" }));
+    const rows =
+      query.words.length > 0 ? db.searchableNotes(owner) : db.listNotes(owner).map((row) => ({ ...row, body: "" }));
     return rows
       .map((row) => ({ row, tags: JSON.parse(row.tags) as string[] }))
       .filter(({ row, tags }) => matchesQuery({ body: row.body, tags }, query))
@@ -156,7 +294,8 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
   });
 
   app.get<{ Params: IdParams }>("/api/notes/:id", { schema: { params: idParams } }, async (request, reply) => {
-    const row = db.getNote(request.params.id);
+    // Another user's note is "not found", exactly like a missing one.
+    const row = db.getNote(request.params.id, userOf(request).id);
     if (!row) return reply.code(404).send({ error: "Note not found" });
     return toNote(row);
   });
@@ -164,8 +303,9 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
   app.post<{ Body: DocBody }>("/api/notes", { schema: { body: docBody } }, async (request, reply) => {
     if (exceedsMaxDepth(request.body.content)) return reply.code(400).send(tooDeep);
     const now = new Date().toISOString();
-    const row: NoteRow = {
+    const row: NoteRow & { owner_id: string } = {
       id: randomUUID(),
+      owner_id: userOf(request).id,
       title: extractTitle(request.body.content),
       content: JSON.stringify(request.body.content),
       created_at: now,
@@ -182,11 +322,14 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
     { schema: { params: idParams, body: docBody } },
     async (request, reply) => {
       const { id } = request.params;
+      const owner = userOf(request).id;
       const content = request.body.content;
       if (exceedsMaxDepth(content)) return reply.code(400).send(tooDeep);
       const tags = request.body.tags === undefined ? null : JSON.stringify(request.body.tags);
+      // One statement scoped to the owner: another user's note can't be touched, only "not found".
       const updated = db.updateNote(
         id,
+        owner,
         extractTitle(content),
         JSON.stringify(content),
         extractText(content),
@@ -194,23 +337,24 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
         new Date().toISOString(),
       );
       if (!updated) return reply.code(404).send({ error: "Note not found" });
-      return toNote(db.getNote(id)!);
+      return toNote(db.getNote(id, owner)!);
     },
   );
 
-  app.get("/api/favorite-fonts", async () => db.listFavoriteFonts());
+  app.get("/api/favorite-fonts", async (request) => db.listFavoriteFonts(userOf(request).id));
 
   app.put<{ Params: FamilyParams }>(
     "/api/favorite-fonts/:family",
     { schema: { params: familyParams } },
     async (request, reply) => {
       const { family } = request.params;
+      const user = userOf(request).id;
       // Synchronous check and insert, so no other request can slip in between.
-      if (!db.isFavoriteFont(family)) {
-        if (db.countFavoriteFonts() >= MAX_FAVORITE_FONTS) {
+      if (!db.isFavoriteFont(user, family)) {
+        if (db.countFavoriteFonts(user) >= MAX_FAVORITE_FONTS) {
           return reply.code(400).send({ error: "Too many favorite fonts" });
         }
-        db.addFavoriteFont(family, new Date().toISOString());
+        db.addFavoriteFont(user, family, new Date().toISOString());
       }
       return reply.code(204).send();
     },
@@ -220,7 +364,7 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
     "/api/favorite-fonts/:family",
     { schema: { params: familyParams } },
     async (request, reply) => {
-      db.removeFavoriteFont(request.params.family);
+      db.removeFavoriteFont(userOf(request).id, request.params.family);
       return reply.code(204).send();
     },
   );
@@ -241,19 +385,23 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
       const type = detectImageType(bytes);
       if (!type) return reply.code(415).send({ error: "Unsupported image type" });
       const id = createHash("sha256").update(bytes).digest("hex");
-      db.insertImage({ id, type, data: bytes, created_at: new Date().toISOString() });
+      // Stored once per content; granted to the uploader even if someone else stored it first.
+      db.insertImage({ id, type, data: bytes, created_at: new Date().toISOString() }, userOf(request).id);
       return reply.code(201).send({ url: `/api/images/${id}` });
     });
   });
 
   app.get<{ Params: IdParams }>("/api/images/:id", { schema: { params: idParams } }, async (request, reply) => {
     const { id } = request.params;
-    const row = IMAGE_ID.test(id) ? db.getImage(id) : undefined;
+    // Malformed, missing, or not this user's: the same 404, so nobody learns what others stored.
+    const row = IMAGE_ID.test(id) ? db.getImage(id, userOf(request).id) : undefined;
     if (!row) return reply.code(404).send({ error: "Image not found" });
+    // The browser keeps a copy but asks every time (an id's bytes never change, so the answer is
+    // usually 304): a signed-out browser, or another user on it, can't show it from cache.
+    reply.header("Cache-Control", "private, no-cache").header("ETag", `"${id}"`);
+    if (request.headers["if-none-match"] === `"${id}"`) return reply.code(304).send();
     return reply
       .header("Content-Type", row.type)
-      // An id is the hash of its bytes, so they never change.
-      .header("Cache-Control", "public, max-age=31536000, immutable")
       .header("X-Content-Type-Options", "nosniff")
       // Only raster types are ever stored; this is defense in depth if one is opened directly.
       .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")

@@ -10,11 +10,23 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
   process.exit(1);
 }
 
-const app = buildApp({
-  dbPath: join(dataDir, "notes.db"),
-  staticDir: resolve(import.meta.dirname, "../dist/web"),
-  logger: true,
-});
+// The reverse proxy's addresses (IPs, CIDR ranges, proxy-addr keywords), comma-separated.
+const trustProxy = process.env.TRUST_PROXY?.trim() || undefined;
+
+let app: ReturnType<typeof buildApp>;
+try {
+  app = buildApp({
+    dbPath: join(dataDir, "notes.db"),
+    staticDir: resolve(import.meta.dirname, "../dist/web"),
+    logger: true,
+    trustProxy,
+  });
+} catch (err) {
+  // An address list Fastify can't compile is the only setting that fails here.
+  if (trustProxy === undefined) throw err;
+  console.error(`Invalid TRUST_PROXY "${trustProxy}": ${err instanceof Error ? err.message : err}`);
+  process.exit(1);
+}
 
 async function shutdown() {
   try {

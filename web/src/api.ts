@@ -24,6 +24,15 @@ export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// Who this tab signed in as. Sent with every request: if someone else has signed in on this
+// browser since (the cookie changed underneath), the server refuses (409) instead of letting this
+// tab read or write the other account.
+let tabUser: string | null = null;
+
+export function setTabUser(username: string) {
+  tabUser = username;
+}
+
 function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   return send<T>(path, {
     method,
@@ -33,7 +42,9 @@ function request<T>(method: string, path: string, body?: unknown): Promise<T> {
 }
 
 async function send<T>(path: string, init: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
+  const headers = new Headers(init.headers);
+  if (tabUser) headers.set("X-Lab-Notes-User", tabUser);
+  const res = await fetch(path, { ...init, headers });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -49,6 +60,12 @@ async function send<T>(path: string, init: RequestInit): Promise<T> {
   if (res.status === 204) return undefined as T; // no body to parse
   return (await res.json()) as T;
 }
+
+export type AuthStatus = { username: string | null; hasAccounts: boolean };
+
+export const authStatus = () => request<AuthStatus>("GET", "/api/auth/status");
+export const signIn = (username: string, password: string) =>
+  request<{ username: string }>("POST", "/api/auth/login", { username, password });
 
 const notePath = (id: string) => `/api/notes/${encodeURIComponent(id)}`;
 

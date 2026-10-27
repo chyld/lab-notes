@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { PanelLeftClose, PanelLeftOpen, Plus, Search } from "lucide-react";
+import { CircleUser, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Search } from "lucide-react";
 import { errorMessage, listNotes, type NoteSummary } from "./api.ts";
+import { useUsername } from "./Auth.tsx";
 import { useCompact } from "./media.ts";
 import { normalizeTag, tagHue } from "./tags.ts";
 
@@ -318,7 +319,29 @@ export function Sidebar({ currentId, refresh }: Props) {
             ))}
           </ul>
         )}
+        <SidebarAccount />
       </nav>
     </>
+  );
+}
+
+/**
+ * Who's signed in, pinned to the bottom of the sidebar, and Sign out: a real form post, so the
+ * page reloads (clearing every cache) and unsaved changes get the browser's "Leave site?" first.
+ */
+function SidebarAccount() {
+  const username = useUsername();
+  return (
+    <div className="sidebar-account">
+      <CircleUser size={18} aria-hidden />
+      <span className="sidebar-username" title={username}>
+        {username}
+      </span>
+      <form method="post" action="/api/auth/logout">
+        <button type="submit" className="tool" aria-label="Sign out" title="Sign out">
+          <LogOut size={18} aria-hidden />
+        </button>
+      </form>
+    </div>
   );
 }

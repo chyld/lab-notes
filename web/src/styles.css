@@ -143,6 +143,40 @@ button:disabled {
   display: none;
 }
 
+/* Who's signed in, and Sign out: pinned to the bottom of the sidebar. */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-account {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding: 0.5rem 0.75rem 0.5rem 1.25rem;
+  border-top: 1px solid var(--line);
+  background: var(--canvas);
+  color: var(--muted);
+}
+
+.sidebar-username {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 14px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-account form {
+  display: contents;
+}
+
 /* Same height as the top bar, so their bottom edges line up. */
 .sidebar-header {
   display: flex;
@@ -1437,12 +1471,17 @@ button.tag-chip:hover {
     font-size: 16px;
   }
 
+  /* Clear of the home indicator in the drawer. */
+  .sidebar-account {
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+
   /* The notes drawer: the visible height, so iOS's keyboard (searching) doesn't cover its end. */
   .sidebar {
     top: var(--viewport-top, 0px);
     width: min(320px, 86vw);
     height: var(--viewport-height, 100dvh);
-    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) env(safe-area-inset-left);
+    padding: env(safe-area-inset-top) 0 0 env(safe-area-inset-left); /* the footer pads the bottom */
   }
 
   .sidebar-header {
@@ -1500,4 +1539,113 @@ button.tag-chip:hover {
     flex: 1 1 auto;
     min-height: 44px;
   }
+}
+
+/* Signing in (Auth.tsx, SignIn.tsx): a card centered on the canvas. */
+.auth-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 1rem;
+  background: var(--canvas);
+}
+
+.auth-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  width: min(380px, 100%);
+  padding: 2rem 1.75rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+
+.auth-card img {
+  filter: drop-shadow(0 8px 20px rgb(124 58 237 / 25%));
+}
+
+.auth-card h1 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.auth-card p {
+  margin: 0;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  width: 100%;
+  text-align: left;
+}
+
+.auth-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.auth-form input {
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--canvas);
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px; /* under 16px, iOS zooms in on focus */
+  font-weight: 400;
+}
+
+.auth-form input:focus {
+  border-color: var(--accent);
+  outline: none;
+  background: var(--surface);
+  box-shadow: var(--focus);
+}
+
+.auth-submit {
+  width: 100%;
+  min-height: 44px;
+  font-size: 15px;
+}
+
+.auth-form .error {
+  margin: 0;
+  font-size: 14px;
+  text-align: center;
+}
+
+.auth-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+.auth-setup pre {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  overflow-x: auto;
+  border-radius: 10px;
+  background: #17161f;
+  color: #e7e5f4;
+  font-size: 13px;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
 }

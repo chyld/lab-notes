@@ -1,8 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, createRoutesFromElements, Route } from "react-router";
-import { RouterProvider } from "react-router/dom";
 import "@fontsource-variable/inter";
+import { Auth } from "./Auth.tsx";
 import { Layout, NoNoteOpen, PageNotFound } from "./Layout.tsx";
 import { NotePage } from "./NotePage.tsx";
 import "./styles.css";
@@ -19,8 +19,9 @@ const router = createBrowserRouter(
   ),
 );
 
+// Signed out: the sign-in page; signed in: the router (see Auth.tsx).
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <RouterProvider router={router} />
+    <Auth router={router} />
   </StrictMode>,
 );
