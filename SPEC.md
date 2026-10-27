@@ -1,13 +1,14 @@
 # Lab Notes — Spec
 
-**Lab Notes** is a self-hosted notes app (the start of a Google Docs–style app) for a homelab. It has two screens:
-a list of notes and a note editor. The editor engine is [Tiptap](https://tiptap.dev/).
+**Lab Notes** is a self-hosted notes app (the start of a Google Docs–style app) for a homelab. It has a notes sidebar
+and a note editor. The editor engine is [Tiptap](https://tiptap.dev/).
 
 ## Scope
 
 In scope, and nothing else:
 
-1. **Notes list**: shows every note by title, with a "New note" button.
+1. **Notes sidebar**: every note by title (and tags), with a "New note" button. It replaced the
+   original list page (user request). See [Notes sidebar](#notes-sidebar).
 2. **Note editor**: edits one note in Tiptap and saves it **only when the Save button is clicked**.
 3. **Title**: the note's title is its **first line**.
 4. **Packaging**: one Docker image, run with Docker Compose, data on a persistent volume.
@@ -21,12 +22,15 @@ In scope, and nothing else:
    [Images](#images).
 9. **Line numbers** (added by user request): a gutter numbering every visual line, toggled from
    the toolbar. See [Line numbers](#line-numbers).
-10. **Notes sidebar** (added by user request): a collapsible left bar on the note screen listing
-    every note; clicking one opens it for editing. See [Notes sidebar](#notes-sidebar).
+10. **Collapsible sidebar** (added by user request): the notes sidebar can be hidden and shown;
+    clicking a note opens it for editing. See [Notes sidebar](#notes-sidebar).
+11. **Tags** (added by user request): each note has tags (lowercase `a-z` and `0-9` only, no
+    spaces), edited in a row above the text and saved with Save; the sidebar shows them and
+    filters by one. See [Tags](#tags).
 
 Out of scope (the user will decide later): delete, autosave, unsaved-changes warnings, keyboard
 save shortcut, search, folders, sharing, auth, real-time collaboration,
-version history, dates or previews in the list, text color, an image button or file picker,
+version history, dates or previews in the sidebar, text color, an image button or file picker,
 image drag-and-drop from outside the browser, image captions/alignment/cropping/alt text, and
 deleting unused images.
 
@@ -39,7 +43,7 @@ deleting unused images.
 | Database | SQLite via `node:sqlite` (`DatabaseSync`), WAL mode | One file, zero ops. |
 | Frontend | `react@^19`, `react-dom@^19`, `vite@^8`, `@vitejs/plugin-react@^6` | Tiptap's first-class binding is React. |
 | Editor | `@tiptap/react@^3`, `@tiptap/pm@^3`, `@tiptap/starter-kit@^3` | StarterKit defaults, except `link.openOnClick: false` (see Toolbar). |
-| Routing | `react-router@^8`, declarative mode (`BrowserRouter`, `Routes`, `Route`) | Two routes, plus a catch-all "Page not found". |
+| Routing | `react-router@^8`, declarative mode (`BrowserRouter`, `Routes`, `Route`) | One layout route (sidebar) with `/`, `/notes/:id`, and a catch-all "Page not found". |
 | Types | `typescript@^7`, `@types/node@^26`, `@types/react@^19`, `@types/react-dom@^19` | `npm run typecheck`. |
 | Styling | One plain CSS file | No UI framework. |
 | Icons | `lucide-react@^1` (devDependency; tree-shaken into the bundle) | Toolbar icons. |
@@ -83,7 +87,7 @@ web/
     main.tsx                # router setup
     api.ts                  # typed fetch helpers
     editor.ts               # shared Tiptap extensions + content validation
-    NotesList.tsx           # route "/"
+    Layout.tsx              # route layout: sidebar + the routed screen (Outlet), "/" empty state
     NotePage.tsx            # route "/notes/:id" (id may be "new"): loading
     NoteEditor.tsx          # the Tiptap editor and Save
     Toolbar.tsx             # formatting toolbar for the editor
@@ -98,7 +102,9 @@ web/
     imagePaste.ts           # paste-to-upload plugin with an "Uploading image…" placeholder
     LineNumbers.tsx         # line-number gutter: measures visual lines, renders the numbers
     Sidebar.tsx             # collapsible notes sidebar + its open/closed state (context)
-    TopBar.tsx              # "← Lab Notes" bar (+ Show notes button) shared by the note screens
+    TagEditor.tsx           # the note's tag row (chips + add-tag input)
+    tags.ts                 # tag rule shared by the UI: normalizeTag(), MAX_TAGS
+    TopBar.tsx              # "Lab Notes" bar (+ Show notes button) shared by every screen
     styles.css
 scripts/
   update-google-fonts.ts    # regenerates web/src/google-fonts.json (npm run fonts:update)
@@ -135,9 +141,15 @@ CREATE TABLE IF NOT EXISTS notes (
   title      TEXT NOT NULL,      -- derived from content on every save
   content    TEXT NOT NULL,      -- Tiptap JSON (JSON.stringify of the request's content)
   created_at TEXT NOT NULL,      -- ISO 8601 UTC
-  updated_at TEXT NOT NULL       -- ISO 8601 UTC
+  updated_at TEXT NOT NULL,      -- ISO 8601 UTC
+  tags       TEXT NOT NULL DEFAULT '[]'  -- JSON array of tag strings, in the order added
 );
 ```
+
+**Migration:** databases created before tags have no `tags` column. `openDb` checks
+`PRAGMA table_info(notes)` and, if it's missing, runs
+`ALTER TABLE notes ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'`, so existing notes get no tags and
+nothing else changes.
 
 ```sql
 CREATE TABLE IF NOT EXISTS images (
@@ -151,8 +163,8 @@ CREATE TABLE IF NOT EXISTS images (
 Images are stored in the same database file, so `notes.db` stays the whole of the app's data.
 
 `openDb(path)` creates the parent directory (`mkdirSync(dirname(path), { recursive: true })`)
-unless `path` is `":memory:"`, opens `DatabaseSync`, runs `PRAGMA journal_mode = WAL;`, and creates
-both tables. The DB file is `$DATA_DIR/notes.db` (`DATA_DIR` defaults to `./data`). WAL mode puts
+unless `path` is `":memory:"`, opens `DatabaseSync`, runs `PRAGMA journal_mode = WAL;`, creates
+both tables, and runs the tags migration. The DB file is `$DATA_DIR/notes.db` (`DATA_DIR` defaults to `./data`). WAL mode puts
 `notes.db-wal` and `notes.db-shm` beside it.
 
 ## Title rule
@@ -180,14 +192,20 @@ All under `/api`, JSON in and out, except image bytes (below). Note POST/PUT req
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| `GET` | `/api/notes` | — | `200` `[{ id, title }]`, most recently saved first (`updated_at DESC, rowid DESC`: saves in the same millisecond list latest-inserted first) |
-| `POST` | `/api/notes` | `{ content: Doc }` | `201` `Note` |
+| `GET` | `/api/notes` | — | `200` `[{ id, title, tags }]`, most recently saved first (`updated_at DESC, rowid DESC`: saves in the same millisecond list latest-inserted first) |
+| `POST` | `/api/notes` | `{ content: Doc, tags?: string[] }` | `201` `Note` |
 | `GET` | `/api/notes/:id` | — | `200` `Note`, or `404` |
-| `PUT` | `/api/notes/:id` | `{ content: Doc }` | `200` `Note`, or `404` |
+| `PUT` | `/api/notes/:id` | `{ content: Doc, tags?: string[] }` | `200` `Note`, or `404` |
 | `POST` | `/api/images` | raw image bytes | `201` `{ url }` |
 | `GET` | `/api/images/:id` | — | `200` the image bytes, or `404` |
 
-`Note` = `{ id, title, content, createdAt, updatedAt }` where `content` is the parsed Tiptap JSON.
+`Note` = `{ id, title, content, tags, createdAt, updatedAt }` where `content` is the parsed Tiptap
+JSON and `tags` the note's tags in the order added.
+
+**Tags:** `tags` is optional. On `POST`, absent means `[]`; on `PUT`, absent leaves the note's tags
+unchanged (the app always sends them). Schema: an array of at most 50 unique strings
+(`uniqueItems`), each matching `^[a-z0-9]+$` and 1–40 characters. Anything else (uppercase,
+spaces, `-`, empty, duplicates, too many, not an array) → `400`. The server stores them as given.
 
 `POST` and `PUT` set `title` from the title rule and `updated_at` (and `created_at` on create) to
 the current time.
@@ -253,17 +271,29 @@ So `POST /anything` is a JSON 404, never `index.html`, and a missing file such a
 
 ### `api.ts`
 
-Typed helpers: `listNotes()`, `getNote(id)`, `createNote(content)`, `updateNote(id, content)`,
+Typed helpers: `listNotes()`, `getNote(id)`, `createNote(content, tags)`, `updateNote(id, content, tags)`,
 `uploadImage(file)`. Note POST/PUT send `Content-Type: application/json`; `uploadImage` sends the
 file's bytes with `Content-Type: file.type` and returns the `url`. A non-2xx response throws an `ApiError` carrying
 `status` and the server's `error` message.
 
-### `/` — Notes list (`NotesList.tsx`)
+### Routes and layout (`Layout.tsx`)
 
-- Heading "Lab Notes" and a "New note" button that navigates to `/notes/new`.
-- The list from `listNotes()`, each item a link to `/notes/:id` showing its title, truncated with a
-  CSS ellipsis.
-- States: loading, error (message), empty ("No notes yet").
+The original list page is gone (user request). Every screen shares one layout route:
+
+```tsx
+<Route element={<Layout />}>
+  <Route index element={<NoNoteOpen />} />        {/* "/" */}
+  <Route path="notes/:id" element={<NotePage />} />
+  <Route path="*" element={<PageNotFound />} />
+</Route>
+```
+
+`Layout` renders the [sidebar](#notes-sidebar) beside an `<Outlet />`, so the sidebar is one
+instance for the whole app: it never remounts when you switch notes or go to `/`.
+
+- `/` shows the top bar (Show notes button while the sidebar is hidden, the "Lab Notes" brand) and
+  a muted message: "Pick a note, or create a new one." Nothing else.
+- Unknown client routes show the top bar and "Page not found."
 
 ### `/notes/:id` — Note page (`NotePage.tsx`)
 
@@ -272,8 +302,8 @@ instance and saving).
 
 `NotePage`:
 
-- Top bar: the Show notes button while the [sidebar](#notes-sidebar) is hidden, a "← Lab Notes"
-  link to `/`, and the editor's Save button (rendered by `NoteEditor`).
+- Top bar: the Show notes button while the [sidebar](#notes-sidebar) is hidden, the "Lab Notes"
+  brand (logo + name) linking to `/`, and the editor's Save button (rendered by `NoteEditor`).
 - Keeps `session = { key, note }` state: `note` is `null` for a new note. It renders
   `<NoteEditor key={session.key} initialNote={session.note} onCreated={...} />` once ready, and
   loading / "Note not found" (with a link back) / error states otherwise.
@@ -324,7 +354,7 @@ deps would destroy and recreate the editor):
   below, the same height as a wrapped line; for space, the user adds a blank line. This includes
   paragraphs inside list items and quotes. Headings, lists, quotes, and code blocks keep their
   margins.
-- Unmatched client routes render "Page not found." with a link back to the list.
+- Unmatched client routes render the top bar and "Page not found." (see [Routes](#routes-and-layout-layouttsx)).
 - Formatting comes from the [toolbar](#toolbar) and from StarterKit's keyboard shortcuts and
   Markdown-style input rules (`# ` heading, `- ` list, `Ctrl+B` bold), which keep working.
 
@@ -698,43 +728,58 @@ Out of scope: numbering only some lines, restarting per page/section, a numberin
 
 ### Notes sidebar
 
-On the note screen (`/notes/:id`, including `new`, loading, not-found, and error states), a left
-bar lists every note; clicking one opens it in the editor. The list page (`/`) is unchanged.
+`Sidebar.tsx`. A left bar on every screen (`/`, `/notes/:id` including `new`, loading, not-found,
+and error states) with a New note button and every note; clicking a note opens it in the editor.
 
-- **Layout:** `NotePage` always renders one `<div className="note-layout">` = the sidebar + a
-  `.note-main` column; only `.note-main`'s children switch (the keyed `NoteEditor`, or the top bar
-  and a status), so the sidebar is a single instance that never remounts. The sidebar
-  (`<nav id="notes-sidebar">`) stays mounted while hidden (`hidden` attribute), keeping its list,
-  scroll position, and the `aria-controls` target. It is 260px wide, light gray (`#f8f9fa`) with a
-  right border, `position: sticky; top: 0; align-self: flex-start; height: 100dvh` with its own
-  vertical scroll, so it stays put while the note scrolls. `.note-main` is `flex: 1; min-width: 0`
-  (the toolbar keeps scrolling sideways; its scrollbar is `thin`, since beside the sidebar it
-  overflows on ~1280px windows). No ancestor sets `overflow`, so the editor header stays sticky.
-  Line numbers re-measure on their own when the sidebar changes the editor's width
-  (`ResizeObserver`).
-- **Contents** (`<nav aria-label="Notes">`): a header row with the label "Notes" and a hide
-  button, then the notes as links (`<Link to="/notes/:id">`), titles truncated with an ellipsis
-  (full title in `title`), most recently saved first, the same data and order as the list page
-  (`listNotes()`). The open note's link has `aria-current="page"` and a light blue background.
-  States: "Loading…" (first load only), "No notes yet", or the error message (first load only;
+- **Layout:** `Layout` owns the sidebar state (`useSidebarState`) and the refresh counter, reads
+  the open note's id with `useParams()` (a layout route sees its child's params; `null` on `/`),
+  and renders one `<div className="note-layout">` = the sidebar + a `.note-main` (made `inert`
+  behind the narrow overlay) column holding the `<Outlet />` (top bar, toolbar, editor or status), so the sidebar is a single
+  instance that never remounts. The sidebar (`<nav id="notes-sidebar" aria-label="Notes">`) stays
+  mounted while hidden (`hidden` attribute), keeping its list, scroll position, and the
+  `aria-controls` target. It is 260px wide, light gray (`#f8f9fa`) with a right border,
+  `position: sticky; top: 0; align-self: flex-start; height: 100dvh` with its own vertical scroll,
+  so it stays put while the note scrolls. `.note-main` is `flex: 1; min-width: 0` (the toolbar
+  keeps scrolling sideways; its scrollbar is `thin`, since beside the sidebar it overflows on
+  ~1280px windows). No ancestor sets `overflow`, so the editor header stays sticky. Line numbers
+  re-measure on their own when the sidebar changes the editor's width (`ResizeObserver`).
+- **Header:** the label "Notes" and the hide button, then a full-width "New note" button (`Plus`
+  icon + text; a `<Link>`) that navigates to `/notes/new`. If an unsaved new note is already open,
+  it stays as it is (same route; the link uses `replace` there, so no duplicate history entry).
+- **Filter bar** (only while filtering): "Tagged" and the active tag as a chip with a × `<button>`
+  (`aria-label="Clear tag filter"`) that clears it and moves focus to New note.
+- **Notes:** most recently saved first (`listNotes()`), each an `<li>` with the title as a link
+  (`<Link to="/notes/:id">`, truncated with an ellipsis, full title in `title`) and, if the note
+  has tags, a wrapping row of small tag chips under it. Each chip is a `<button>` (`#tag`,
+  `aria-pressed` when it's the active filter, `title="Show notes tagged tag"`); clicking it sets the
+  filter to that tag, clicking the active one clears it. Chips sit beside the link, not inside it
+  (no interactive content inside a link). The open note's link has `aria-current="page"` and a
+  light blue background.
+- **Filtering:** while a tag filter is set, only notes with that tag are listed, plus the open note
+  whether or not it has the tag (so you always see where you are, e.g. a new untagged note you
+  just saved while filtering). The filter lives in `Layout` state:
+  it survives switching notes, but not a reload. If no note has the tag any more (e.g. it was just
+  removed and saved), the list says "No notes tagged #tag" and the × still clears it.
+- **States:** "Loading…" (first load only), "No notes yet", or the error message (first load only;
   a failed refresh keeps the list already shown).
 - **Freshness:** `NoteEditor` gets an `onSaved()` callback, called after every successful save
   (PUT or the first POST, after `onCreated`'s navigation so the new note is highlighted). Unlike
   `onCreated` it is not guarded by `mountedRef`: a save that finishes after the user switched notes
-  still refreshes the list. Switching notes also refetches (so a failed first load is retried). `NotePage` bumps a counter and the sidebar refetches, so a new note
-  appears and renamed/re-saved notes move to the top. While refetching, the previous list stays
-  shown; the effect's cleanup cancels a superseded request, so an older response never overwrites
-  a newer list. The sidebar lives in `NotePage`, outside the keyed `NoteEditor`, so switching notes
-  doesn't reload it.
-- **Switching notes:** clicking a note is plain navigation, like the list page's links: unsaved
-  edits in the open note are discarded (unsaved-changes warnings remain out of scope). Clicking the
-  note that's already open changes nothing.
+  still refreshes the list. `Layout` provides `notesChanged` in the sidebar context and
+  `NotePage` reads it with `useNotesChanged()` as its `onSaved`; it bumps a counter
+  and the sidebar refetches, so a new note appears and renamed/re-tagged/re-saved notes update and
+  move to the top. Switching notes also refetches (so a failed first load is retried). While
+  refetching, the previous list stays shown; the effect's cleanup cancels a superseded request,
+  so an older response never overwrites a newer list.
+- **Switching notes:** clicking a note, New note, or the brand is plain navigation: unsaved edits
+  in the open note are discarded (unsaved-changes warnings remain out of scope). Clicking the note
+  that's already open changes nothing.
 - **Collapse:** the sidebar header's button (`PanelLeftClose` icon, `aria-label="Hide notes"`)
   hides it; while hidden, the top bar shows a button at its far left (`PanelLeftOpen`,
   `aria-label="Show notes"`) that shows it. Both are `.tool`-style icon buttons with
   `aria-expanded` and `aria-controls="notes-sidebar"`; since each replaces the other, focus moves
   to the one now shown. The state is shared through a small React context in `Sidebar.tsx`,
-  provided by `NotePage`, read by `TopBar` (with no provider, the Show button renders nothing).
+  provided by `Layout`, read by `TopBar` (with no provider, the Show button renders nothing).
 - **Remembered:** on wide screens the open/closed choice is stored in
   `localStorage["lab-notes:sidebar"]` (`"open"`/`"closed"`, default open; unavailable storage
   just means not remembered).
@@ -746,16 +791,56 @@ bar lists every note; clicking one opens it in the editor. The list page (`/`) i
   popovers at 10, with a shadow), makes `.note-main` `inert` while open (no tabbing into the
   editor underneath), and closes on a backdrop click or Esc (a `document` keydown listener while
   the overlay is open, so it works wherever focus is; both return focus to Show notes) or on
-  picking a note.
+  picking a note or New note. Clicking a tag chip filters and leaves it open.
 
-Out of scope: a New note button in the sidebar, search, reordering, delete.
+Out of scope: search, reordering, delete, renaming a tag across notes, filtering by several tags.
+
+### Tags
+
+A note's tags are labels made of lowercase letters and digits only (`a-z`, `0-9`; no spaces or
+other characters), 1–40 characters, at most 50 per note, unique within the note, kept in the order
+added. They are part of the note: saved by the Save button with the content (no autosave), never
+in the document JSON.
+
+- **Tag row** (`TagEditor.tsx`): a row at the top of the note area, above the text (inside
+  `.page-wrap`, so it scrolls with the note; not in the sticky header), aligned with the text's
+  left edge (the same left padding as the text: 3rem, 4.5rem with line numbers, 1.25rem/3rem
+  under 816px). It shows the note's tags as chips (`#tag` and a × button,
+  `aria-label="Remove tag tag"`; removing moves focus to the input) followed by a small input
+  (`aria-label="Add tag"`, placeholder `add tag`, `spellcheck=false`, `autocapitalize=off`; no
+  `maxLength`, since it would cut a paste before normalizing).
+- **Typing:** a space or comma ends a tag. This is checked on every change of the input's value,
+  not only on keydown (phone keyboards often don't report those keys), so pasting
+  `Home Lab, ZFS` adds `home` and `lab` and leaves `zfs` typed. The typed part keeps only allowed
+  characters: uppercase becomes lowercase, anything else is dropped. Enter (and Space/comma on
+  keydown, which are prevented from reaching the input) adds the typed tag; leaving the input
+  (blur) adds it too. An empty input adds nothing; a tag the note already has, or a 51st tag, is
+  not added (the input clears). Focus stays in the input after adding by keyboard.
+- **Dirty and Save:** adding or removing a tag bumps the editor's one version counter (the same
+  one document changes bump, see Dirty tracking), so Save lights up and a tag change made during
+  a save stays unsaved. Text typed in the tag input but not yet added also counts as unsaved
+  (Save is enabled), and Save adds it first, so a typed tag is never lost by clicking Save. The
+  editor owns the typed text (`draft`) and keeps tags and draft in refs, which is what a save
+  reads.
+- **Saving:** Save sends `tags` with the content (`createNote(content, tags)` /
+  `updateNote(id, content, tags)`); the tags captured at the start of the save are what's saved.
+  After saving, the sidebar refreshes and shows the new tags.
+- **Line numbers** measure only the editor's text, so the tag row gets no number. The gutter's
+  `ResizeObserver` also watches the tag row, so when it wraps onto another line (moving the text
+  down without resizing the editor) the numbers follow.
+- **Look:** chips are small rounded pills (`#e9eef6` background, `#444746` text, 13px); the × is a
+  small icon button. The sidebar's chips use the same style at 12px; the active filter chip is
+  light blue (`#d3e3fd`, `#0b57d0`).
+- `tags.ts` holds the rule for the UI: `normalizeTag(text)` (lowercase, strip disallowed
+  characters, cut to 40), `MAX_TAG_LENGTH = 40`, and `MAX_TAGS = 50`. The server validates
+  independently (see API; `coerceTypes: false`, so `tags: "foo"` is a 400, not `["foo"]`).
 
 ## Branding
 
-The app is **Lab Notes**: browser tab title, the list heading, and the "← Lab Notes" back link.
+The app is **Lab Notes**: browser tab title and the top bar's brand link to `/`.
 `web/public/logo.svg` is a blue (`#0b57d0`) document with a light-blue (`#8ab4f8`) folded corner
-and a white lab flask with light-blue liquid. It is the favicon, the 36px logo beside the list
-heading, and the 22px logo in the top bar's back link.
+and a white lab flask with light-blue liquid. It is the favicon and the 22px logo in the top bar's
+brand link.
 
 ## Configuration
 
@@ -828,10 +913,11 @@ they never touch `./data`.
 ## Acceptance criteria
 
 1. `docker compose up -d --build` starts the app on `http://<host>:5555`.
-2. The list shows "No notes yet" on a fresh install.
-3. "New note" → type text → Save creates a note; the URL becomes `/notes/<id>` and the editor keeps
+2. On a fresh install, `/` shows the sidebar with "No notes yet" and "Pick a note, or create a new
+   one."
+3. The sidebar's "New note" → type text → Save creates a note; the URL becomes `/notes/<id>` and the editor keeps
    its content and cursor. A second Save updates the same note (no duplicate).
-4. Back on the list, the note appears, titled with its first line; first line blank → `Untitled`.
+4. The note appears in the sidebar, titled with its first line; first line blank → `Untitled`.
 5. Opening a note shows Save disabled; editing enables it; Save persists; reloading shows the saved
    content.
 6. Unsaved edits are not persisted (no autosave).
@@ -856,7 +942,12 @@ they never touch `./data`.
 14. Line numbers: the toolbar toggle shows/hides a gutter numbering every visual line (wrapped
     lines, code lines, empty paragraphs; not images); the numbers follow typing, window resizes,
     font changes, and image loads; the setting survives a reload; it never marks the note dirty.
-15. Sidebar: the note screen shows a left bar listing every note (most recent first, the open
-    note highlighted); clicking a note opens it; saving updates the list; Hide/Show collapses and
+15. Sidebar: every screen shows a left bar with a New note button and every note (most recent
+    first, the open note highlighted, tags under titles); clicking a note opens it; saving updates the list; Hide/Show collapses and
     restores it, remembered on wide screens; on narrow screens it's an overlay that closes after
     picking a note.
+16. Tags: typing in the tag row accepts only `a-z0-9` (uppercase lowercased, others dropped);
+    Enter/Space/comma/blur adds a tag, × removes one, both enable Save; Save persists them and the
+    sidebar shows them; clicking a tag chip in the sidebar filters to notes with that tag and
+    clicking it (or the filter's ×) again clears it; the API rejects invalid tags with 400; an
+    existing database gains the `tags` column with every note untagged.
