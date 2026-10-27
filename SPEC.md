@@ -15,10 +15,16 @@ In scope, and nothing else:
    for the formatting StarterKit already supports. See [Toolbar](#toolbar).
 6. **Fonts and font size** (added by user request): pick any Google Font by browsing/searching,
    linked from fonts.googleapis.com, and set font size. See [Fonts and size](#fonts-and-size).
+7. **Highlighter** (added by user request): highlight text in one of 8 colors. See
+   [Highlight](#highlight).
+8. **Images** (added by user request): paste images into a note and resize them. See
+   [Images](#images).
 
 Out of scope (the user will decide later): delete, autosave, unsaved-changes warnings, keyboard
 save shortcut, search, folders, sharing, auth, real-time collaboration,
-version history, dates or previews in the list, images/uploads.
+version history, dates or previews in the list, text color, an image button or file picker,
+image drag-and-drop from outside the browser, image captions/alignment/cropping/alt text, and
+deleting unused images.
 
 ## Stack
 
@@ -34,6 +40,8 @@ version history, dates or previews in the list, images/uploads.
 | Styling | One plain CSS file | No UI framework. |
 | Icons | `lucide-react@^1` (devDependency; tree-shaken into the bundle) | Toolbar icons. |
 | Fonts | `@tiptap/extension-text-style@^3` (`TextStyle`, `FontFamily`, `FontSize`); Google Fonts CSS API | Font family and size. |
+| Highlight | `@tiptap/extension-highlight@^3` (`multicolor: true`) | Highlighter colors. |
+| Images | `@tiptap/extension-image@^3` (its built-in `resize` node view) | Pasted, resizable images. |
 | Tests | `node:test` (built in) | Server title logic and API. |
 
 The lockfile is the source of truth for exact versions.
@@ -58,6 +66,7 @@ server/
   index.ts                  # entry: reads env, builds app, listens, handles SIGTERM/SIGINT
   app.ts                    # buildApp({ dbPath, staticDir? }) -> Fastify instance
   db.ts                     # openDb(path): mkdir, open, PRAGMA, schema, statements
+  images.ts                 # image size limit, accepted content types, type detection
   title.ts                  # extractTitle(doc: unknown) -> string
   title.test.ts
   app.test.ts
@@ -77,12 +86,16 @@ web/
     ToolButton.tsx          # shared toolbar icon button + divider
     FontPicker.tsx          # Google Fonts browser (toolbar control)
     FontSizeControl.tsx     # − [size] + (toolbar control)
+    HighlightPicker.tsx     # highlighter button + 8-color palette (toolbar control)
+    popover.ts              # shared popover positioning and dismissal (font picker, highlight)
     fonts.ts                # catalog loading, Google Fonts <link> loading, font-family values
     google-fonts.json       # generated catalog: [family, category][] by popularity
-scripts/
-  update-google-fonts.ts    # regenerates web/src/google-fonts.json (npm run fonts:update)
+    highlights.ts           # the 8 highlight colors
+    imagePaste.ts           # paste-to-upload plugin with an "Uploading image…" placeholder
     TopBar.tsx              # "← Lab Notes" bar shared by the note screens
     styles.css
+scripts/
+  update-google-fonts.ts    # regenerates web/src/google-fonts.json (npm run fonts:update)
 ```
 
 ### Server TypeScript rules (Node 26 type stripping)
@@ -120,9 +133,20 @@ CREATE TABLE IF NOT EXISTS notes (
 );
 ```
 
+```sql
+CREATE TABLE IF NOT EXISTS images (
+  id         TEXT PRIMARY KEY,   -- SHA-256 of the bytes, lowercase hex
+  type       TEXT NOT NULL,      -- MIME type detected from the bytes
+  data       BLOB NOT NULL,
+  created_at TEXT NOT NULL       -- ISO 8601 UTC
+);
+```
+
+Images are stored in the same database file, so `notes.db` stays the whole of the app's data.
+
 `openDb(path)` creates the parent directory (`mkdirSync(dirname(path), { recursive: true })`)
 unless `path` is `":memory:"`, opens `DatabaseSync`, runs `PRAGMA journal_mode = WAL;`, and creates
-the table. The DB file is `$DATA_DIR/notes.db` (`DATA_DIR` defaults to `./data`). WAL mode puts
+both tables. The DB file is `$DATA_DIR/notes.db` (`DATA_DIR` defaults to `./data`). WAL mode puts
 `notes.db-wal` and `notes.db-shm` beside it.
 
 ## Title rule
@@ -145,7 +169,8 @@ can overflow the call stack.
 
 ## API
 
-All under `/api`, JSON in and out. POST/PUT require `Content-Type: application/json`.
+All under `/api`, JSON in and out, except image bytes (below). Note POST/PUT require
+`Content-Type: application/json`.
 
 | Method | Path | Body | Response |
 |---|---|---|---|
@@ -153,6 +178,8 @@ All under `/api`, JSON in and out. POST/PUT require `Content-Type: application/j
 | `POST` | `/api/notes` | `{ content: Doc }` | `201` `Note` |
 | `GET` | `/api/notes/:id` | — | `200` `Note`, or `404` |
 | `PUT` | `/api/notes/:id` | `{ content: Doc }` | `200` `Note`, or `404` |
+| `POST` | `/api/images` | raw image bytes | `201` `{ url }` |
+| `GET` | `/api/images/:id` | — | `200` the image bytes, or `404` |
 
 `Note` = `{ id, title, content, createdAt, updatedAt }` where `content` is the parsed Tiptap JSON.
 
@@ -170,6 +197,28 @@ not deeply validated in the MVP.
 deep (checked iteratively) with `400 { error: "Document is nested too deeply" }`. Each Tiptap node
 level is two JSON levels, so this allows ~100 levels of nesting, far beyond real documents, and
 keeps recursive JSON handling (serializing the reply) from overflowing the stack after a write.
+
+**Images.**
+
+- `POST /api/images` takes the raw bytes with any `image/*` `Content-Type` or
+  `application/octet-stream`. Those parsers (`parseAs: "buffer"`) are registered in an
+  encapsulated Fastify plugin with the route, so other routes still reject image bodies with 415.
+  The route's `bodyLimit` is 25 MiB (`MAX_IMAGE_BYTES`); bigger → 413.
+- The type is detected from the leading bytes (PNG `89 50 4E 47 0D 0A 1A 0A`, JPEG `FF D8 FF`,
+  GIF `GIF87a`/`GIF89a`, WebP `RIFF????WEBP`), not taken from the header. Anything else →
+  `415 { error: "Unsupported image type" }`; an empty body → `400 { error: "Image is empty" }`.
+  SVG is never accepted (it can carry script).
+- The id is the SHA-256 of the bytes; the row is inserted with `INSERT OR IGNORE`, so the same
+  image pasted twice is stored once. Response: `201 { url: "/api/images/<id>" }`.
+- `GET /api/images/:id`: an id that isn't 64 lowercase hex characters, or isn't stored →
+  `404 { error: "Image not found" }`. Otherwise the bytes with `Content-Type` the stored type,
+  `Cache-Control: public, max-age=31536000, immutable` (an id's bytes can never change), and
+  `X-Content-Type-Options: nosniff`, and `Content-Security-Policy: default-src 'none'; style-src
+  'unsafe-inline'; sandbox` (defense in depth if one is opened directly). `HEAD` works too
+  (Fastify's automatic HEAD route).
+- Nothing deletes images (there is no delete anywhere). An image pasted into a note that is never
+  saved stays in the database unused. Like the rest of the app there is no auth, so anyone who can
+  reach the port can upload; there is no total-size quota (accepted for a homelab).
 
 **Errors.** Every error response is `{ "error": string }` with the original status:
 
@@ -198,8 +247,9 @@ So `POST /anything` is a JSON 404, never `index.html`, and a missing file such a
 
 ### `api.ts`
 
-Typed helpers: `listNotes()`, `getNote(id)`, `createNote(content)`, `updateNote(id, content)`.
-POST/PUT send `Content-Type: application/json`. A non-2xx response throws an `ApiError` carrying
+Typed helpers: `listNotes()`, `getNote(id)`, `createNote(content)`, `updateNote(id, content)`,
+`uploadImage(file)`. Note POST/PUT send `Content-Type: application/json`; `uploadImage` sends the
+file's bytes with `Content-Type: file.type` and returns the `url`. A non-2xx response throws an `ApiError` carrying
 `status` and the server's `error` message.
 
 ### `/` — Notes list (`NotesList.tsx`)
@@ -279,14 +329,14 @@ dividers. `ToolButton.tsx` holds the shared icon button (`Tool`) and divider:
 | Block style | A `<select>`: Normal text, Heading 1, Heading 2, Heading 3, Heading 4, Heading 5, Heading 6 |
 | Font | Font picker (see [Fonts and size](#fonts-and-size)) |
 | Size | Font size: `−` `[12]` `+` |
-| Marks | Bold, Italic, Underline, Strikethrough, Inline code |
+| Marks | Bold, Italic, Underline, Strikethrough, Inline code, Highlight color |
 | Link | Link |
 | Lists | Bulleted list, Numbered list |
 | Blocks | Quote, Code block, Horizontal line |
 | Clear | Clear formatting |
 
-Nothing else: no colors, highlight, alignment, indent buttons, images, tables, or anything
-StarterKit and the text-style extensions above don't include. StarterKit's shortcuts without a control (e.g. Shift+Enter
+Nothing else: no text color, alignment, indent buttons, image button, tables, or anything
+StarterKit and the extensions above don't include. StarterKit's shortcuts without a control (e.g. Shift+Enter
 line break, `Ctrl+Alt+0`–`6` paragraph/heading) keep working.
 
 Behavior:
@@ -349,7 +399,7 @@ Behavior:
   Enter.
   Icons (lucide-react): `Undo2`, `Redo2`, `Bold`, `Italic`, `Underline`, `Strikethrough`, `Code`,
   `Link` (imported as `LinkIcon`), `List`, `ListOrdered`, `Quote`, `SquareCode`, `Minus`,
-  `RemoveFormatting`.
+  `RemoveFormatting`, `Highlighter`.
 - **Look:** Google Docs–like. Icon buttons (lucide icons, 18px) in a light gray rounded bar.
   Hover is a slightly darker gray; pressed is light blue (`#d3e3fd`) with a blue icon
   (`#0b57d0`); disabled is faded. On narrow screens the row scrolls horizontally rather than
@@ -462,6 +512,125 @@ family.
 Out of scope: weights other than regular/bold, uploading fonts, a per-note default font, line
 height, colors.
 
+### Highlight
+
+**Extension.** `editor.ts` adds Tiptap's `Highlight` with `multicolor: true`. A highlight is a
+`highlight` mark with a `color` attribute (normally a palette hex value), saved in the note's JSON
+and rendered as `<mark data-color="#ffe967" style="background-color: #ffe967; color: inherit">`
+(Tiptap drops invalid CSS values). Clear formatting removes it like any mark.
+
+- `Ctrl+Shift+H` (⌘⇧H on macOS) toggles **Yellow**: the extension's shortcut is overridden to
+  `toggleHighlight({ color: Yellow })`, because the stock colorless toggle merges in the color of
+  the highlight around the cursor, even one just removed with None. On text highlighted another
+  color it switches it to Yellow; on Yellow text it removes it.
+- The `==text==` input and paste rules are kept (like StarterKit's Markdown rules); they add a
+  highlight with no color, which CSS shows as Yellow and the toolbar treats as Yellow.
+- Pasted `<mark>`s keep their own color, even one outside the palette: the button's bar shows it
+  and no swatch is pressed.
+
+**Palette** (`highlights.ts`), in rainbow order:
+
+| Name | Hex |
+|---|---|
+| Red | `#ffaba3` |
+| Orange | `#ffc18a` |
+| Yellow | `#ffe967` |
+| Green | `#bbf7bc` |
+| Cyan | `#88f3ff` |
+| Blue | `#90c4ff` |
+| Purple | `#d9baff` |
+| Pink | `#ffb2d6` |
+
+Why these: the hues are spread evenly around the color wheel (~45° apart, OKLCH hues 25° to 350°)
+so each is a familiar, nameable color; all eight share one OKLCH chroma (0.10, Yellow 0.15 to
+read as a highlighter) so none shouts over the others; each is as light as sRGB allows at that
+chroma (OKLCH L ≤ 0.92) so the note's `#1f1f1f` text keeps at least 9:1 contrast on every color
+(WCAG AAA asks 7:1). The closest pair (Red/Pink) is still 0.066 apart in OKLab, clearly distinct.
+Some pairs (Blue/Purple) are hard to tell apart with red-green color blindness, which no 8-hue
+palette avoids, so every swatch is also named (tooltip and `aria-label`).
+
+**Highlight picker** (`HighlightPicker.tsx`), in the marks group after Inline code:
+
+- A button with the `Highlighter` icon and a 3px bar under it in the highlight color at the
+  selection (no bar when there's none). `aria-label="Highlight color"`, `title="Highlight color"`,
+  `aria-haspopup="dialog"`, `aria-expanded`. Disabled where `editor.can().setHighlight()` is false
+  (code blocks, inline code).
+- "At the selection" uses `markAt(editor, "highlight")` (`editor.ts`), the same rules as
+  `textStyleAt` (which becomes `markAt(editor, "textStyle")?.attrs ?? {}`): stored marks at a
+  cursor (even an empty set after Clear formatting), else the marks there; for a range, the marks
+  of the node at its start.
+- Clicking opens a popover (`role="dialog"`, `aria-label="Highlight colors"`) under the button,
+  positioned and dismissed exactly like the font picker's (`popover.ts`, shared): portal on
+  `document.body`, `position: fixed`; closes on Esc (refocusing the editor), an outside click,
+  focus leaving it, a window resize, or an outside element scrolling.
+- It holds one row of 8 round swatch buttons (24px, in palette order; `aria-label` and `title` the
+  color's name; `aria-pressed` on the current color) and a "None" button. On open, focus goes to
+  the current color's swatch, or the first. Tab/Shift+Tab move between them; Enter/Space or a
+  click applies. Applying runs `editor.chain().focus().setHighlight({ color }).run()`; None runs
+  `unsetHighlight()`. Either closes the popover. At a cursor, like Bold, it applies to the text
+  typed next.
+
+### Images
+
+**Extension.** `editor.ts` adds Tiptap's `Image` configured with `resize: { enabled: true,
+directions: ["top-left", "top-right", "bottom-left", "bottom-right"], minWidth: 32, minHeight: 32,
+alwaysPreserveAspectRatio: true }`. Its node view is wrapped so that every update reapplies
+`width`/`height` to the `<img>`: Tiptap's resizable view only applies sizes it made itself, so
+otherwise undoing or redoing a resize would leave the old size on screen. Images are block nodes (`inline: false`, the default), so an
+image pasted mid-line splits the line. A node is `{ type: "image", attrs: { src, alt, title,
+width, height } }`; `width`/`height` are pixels, `null` until resized. `allowBase64` stays false:
+`data:` images in pasted HTML are dropped. The extension's `![alt](src)` input rule is kept. Images
+have no text, so the title rule skips them.
+
+**Paste** (`imagePaste.ts`, a Tiptap extension with one ProseMirror plugin):
+
+- `handlePaste` takes over when the clipboard has `image/*` files and either has no `text/html` or
+  the pasted slice has no text. So a screenshot or a browser's "Copy image" pastes
+  the image file, while copying text and pictures together (a web page, a word processor, which
+  also puts a PNG of the whole selection on the clipboard) pastes normally. In a code block it
+  doesn't take over. Pasted HTML `<img>`s keep their URLs (Tiptap's default), so a web page's
+  images are hotlinked (the same goes for HTML dragged in from another page).
+- A file over 25 MiB is skipped with `alert("Images can be up to 25 MB.")` before uploading.
+- The paste changes nothing yet: the plugin records the selection range and its content, and shows
+  an "Uploading image…" placeholder (a widget decoration) at the range's end. The range is mapped
+  through every edit made meanwhile (text typed at its edges stays outside it). It uploads the
+  files (`uploadImage`, in parallel; types other than PNG/JPEG/GIF/WebP come back as 415
+  "Unsupported image type").
+- When all have settled, one transaction (one undo step) removes the placeholder and, if any
+  upload succeeded, inserts the images in clipboard order with `replaceRangeWith` (which moves out
+  of a paragraph's start/end, replaces an empty paragraph, and splits a line mid-way). The pasted-
+  over selection is replaced only if its content is unchanged; if the user edited it meanwhile,
+  the images go after it instead. If the selection is still the pasted range, the cursor ends up
+  right after the images (a paragraph is added after them if no textblock follows), so typing
+  continues below; otherwise the user's selection is left alone. Failed uploads are reported with
+  `alert`; if every upload failed, the document is untouched. If the editor was destroyed
+  meanwhile (the user left), nothing happens.
+- The placeholder is a decoration, not content: it is never saved. A Save during an upload saves
+  the note without the pending images; inserting them makes the note dirty again (leaving before
+  saving again loses them, like any unsaved edit; unsaved-changes warnings are out of scope).
+
+**Resize.** Clicking an image selects it (blue outline) and shows four corner handles; dragging one
+resizes the image, keeping its aspect ratio, down to 32px. Releasing stores `width` and `height` on
+the node (one undo step; marks the note dirty) and leaves the image selected; as with any selected
+image, typing replaces it (undoable). Mouse only: the library's touch resizing never commits.
+
+The library ships no handle styling and sets inline pixel `width` *and* `height`, so `styles.css`
+supplies:
+
+- `[data-resize-container]` and `[data-resize-wrapper]`: `max-width: 100%`.
+- the `<img>`: `max-width: 100%; height: auto !important`. The `!important` beats the inline
+  height, so the height always follows the width and the aspect ratio holds. A drag past the page
+  edge is capped at the page width, and since the commit reads the rendered `offsetWidth`/
+  `offsetHeight`, the capped, proportional size is what's stored. Unresized images show at natural
+  size, capped the same way; on a narrower window a stored width is capped too.
+- handles: 10px white squares with a blue border at the corners, diagonal resize cursors, shown on
+  hover, while selected (`.ProseMirror-selectednode`), and while dragging; the selected image gets
+  a 2px blue outline.
+
+**Privacy.** Pasted image files are stored on the server and never leave the homelab. Hotlinked
+images in pasted HTML are the exception: they load from their original site whenever the note is
+opened, which tells that site the viewer's IP address.
+
 ## Branding
 
 The app is **Lab Notes**: browser tab title, the list heading, and the "← Lab Notes" back link.
@@ -557,3 +726,11 @@ they never touch `./data`.
 11. Fonts: the picker searches/filters all Google Fonts with live previews; choosing one applies
     it to the selection and loads it; reopening the note (or reloading) shows the text in that
     font. Font size shows the size at the cursor, and −, +, and typed sizes change it.
+12. Highlight: each of the 8 colors applies to the selection and None removes it; the button's bar
+    shows the color at the cursor; Ctrl+Shift+H toggles Yellow; a saved, reloaded note keeps its
+    highlights.
+13. Images: pasting a screenshot inserts it at the cursor; a failed upload leaves the note
+    unchanged; dragging a corner resizes it with the aspect ratio kept and never wider than the
+    page; undo/redo of a resize updates the image; Save then reload shows it at the new size; it
+    survives `docker compose down && docker compose up -d`; `npm test` covers upload, dedupe, type
+    detection, 413/415/404, and the GET headers.
