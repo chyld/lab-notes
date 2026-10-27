@@ -82,7 +82,7 @@ type State =
   | { status: "ready"; notes: NoteSummary[] };
 
 type Props = {
-  /** The route's note id ("new" for an unsaved note). */
+  /** The route's note id ("new" for an unsaved note). Switching notes refetches the list. */
   currentId: string;
   /** Bumped after every save, which refetches the list. */
   refresh: number;
@@ -106,26 +106,39 @@ export function Sidebar({ currentId, refresh }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [refresh]);
+    // currentId: switching notes refetches too, so a failed first load is retried.
+  }, [refresh, currentId]);
 
-  const close = () => sidebar.setOpen(false);
+  const { narrow, open, setOpen } = sidebar;
+  const close = () => setOpen(false);
+
+  // The narrow overlay closes on Esc wherever focus is (clicking its empty area drops focus to
+  // <body>), like a dialog, and hands focus back to Show notes.
+  useEffect(() => {
+    if (!narrow || !open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      focusLater("show-notes");
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [narrow, open, setOpen]);
 
   return (
     <>
-      {sidebar.narrow && sidebar.open && <div className="sidebar-backdrop" aria-hidden onClick={close} />}
-      <nav
-        id="notes-sidebar"
-        className="sidebar"
-        aria-label="Notes"
-        hidden={!sidebar.open}
-        onKeyDown={(event) => {
-          // The narrow overlay closes on Esc, like a dialog.
-          if (event.key !== "Escape" || !sidebar.narrow) return;
-          event.preventDefault();
-          close();
-          focusLater("show-notes");
-        }}
-      >
+      {narrow && open && (
+        <div
+          className="sidebar-backdrop"
+          aria-hidden
+          onClick={() => {
+            close();
+            focusLater("show-notes");
+          }}
+        />
+      )}
+      <nav id="notes-sidebar" className="sidebar" aria-label="Notes" hidden={!open}>
         <div className="sidebar-header">
           <span className="sidebar-title">Notes</span>
           <button

@@ -721,7 +721,7 @@ bar lists every note; clicking one opens it in the editor. The list page (`/`) i
 - **Freshness:** `NoteEditor` gets an `onSaved()` callback, called after every successful save
   (PUT or the first POST, after `onCreated`'s navigation so the new note is highlighted). Unlike
   `onCreated` it is not guarded by `mountedRef`: a save that finishes after the user switched notes
-  still refreshes the list. `NotePage` bumps a counter and the sidebar refetches, so a new note
+  still refreshes the list. Switching notes also refetches (so a failed first load is retried). `NotePage` bumps a counter and the sidebar refetches, so a new note
   appears and renamed/re-saved notes move to the top. While refetching, the previous list stays
   shown; the effect's cleanup cancels a superseded request, so an older response never overwrites
   a newer list. The sidebar lives in `NotePage`, outside the keyed `NoteEditor`, so switching notes
@@ -744,7 +744,8 @@ bar lists every note; clicking one opens it in the editor. The list page (`/`) i
   Crossing the breakpoint switches to that width's state. It opens as an overlay (`position:
   fixed`, `z-index: 30` over a translucent backdrop at 29, so above the sticky header and the
   popovers at 10, with a shadow), makes `.note-main` `inert` while open (no tabbing into the
-  editor underneath), and closes on a backdrop click, Esc (focus returns to Show notes), or
+  editor underneath), and closes on a backdrop click or Esc (a `document` keydown listener while
+  the overlay is open, so it works wherever focus is; both return focus to Show notes) or on
   picking a note.
 
 Out of scope: a New note button in the sidebar, search, reordering, delete.
