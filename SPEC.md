@@ -192,7 +192,7 @@ All under `/api`, JSON in and out, except image bytes (below). Note POST/PUT req
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| `GET` | `/api/notes` | — | `200` `[{ id, title, tags }]`, most recently saved first (`updated_at DESC, rowid DESC`: saves in the same millisecond list latest-inserted first) |
+| `GET` | `/api/notes` | — | `200` `[{ id, title, tags, updatedAt }]`, most recently saved first (`updated_at DESC, rowid DESC`: saves in the same millisecond list latest-inserted first) |
 | `POST` | `/api/notes` | `{ content: Doc, tags?: string[] }` | `201` `Note` |
 | `GET` | `/api/notes/:id` | — | `200` `Note`, or `404` |
 | `PUT` | `/api/notes/:id` | `{ content: Doc, tags?: string[] }` | `200` `Note`, or `404` |
@@ -748,8 +748,13 @@ and error states) with a New note button and every note; clicking a note opens i
   it stays as it is (same route; the link uses `replace` there, so no duplicate history entry).
 - **Filter bar** (only while filtering): "Tagged" and the active tag as a chip with a × `<button>`
   (`aria-label="Clear tag filter"`) that clears it and moves focus to New note.
-- **Notes:** most recently saved first (`listNotes()`), each an `<li>` with the title as a link
-  (`<Link to="/notes/:id">`, truncated with an ellipsis, full title in `title`) and, if the note
+- **Notes:** most recently saved first (`listNotes()`), each an `<li>` with a link
+  (`<Link to="/notes/:id">`, full title in `title`) holding two lines: the title (truncated with an
+  ellipsis) and, under it in small gray text, when the note was last saved (user request) as a
+  `<time dateTime={updatedAt}>` with the full date and time in its `title`. The label uses the
+  browser's locale and time zone (`Intl.DateTimeFormat`): "Edited today, 3:42 PM", "Edited
+  yesterday, 9:10 AM", "Edited Oct 12, 3:42 PM" (earlier this year), "Edited Oct 12, 2025"
+  (older). "Today"/"yesterday" are judged when the list renders (every refetch). Then, if the note
   has tags, a wrapping row of small tag chips under it. Each chip is a `<button>` (`#tag`,
   `aria-pressed` when it's the active filter, `title="Show notes tagged tag"`); clicking it sets the
   filter to that tag, clicking the active one clears it. Chips sit beside the link, not inside it
