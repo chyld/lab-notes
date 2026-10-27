@@ -1,5 +1,5 @@
 import type { MouseEvent } from "react";
-import { useEditorState, type Editor } from "@tiptap/react";
+import { isMacOS, useEditorState, type Editor } from "@tiptap/react";
 import {
   Bold,
   Code,
@@ -21,10 +21,17 @@ import {
 type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 const HEADING_LEVELS: HeadingLevel[] = [1, 2, 3, 4, 5, 6];
 
-const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
+// Tiptap's own check, so labels match how "Mod" is actually bound.
+const IS_MAC = isMacOS();
 
+/** "Mod+Shift+S" → "Ctrl+Shift+S", or "⌘⇧S" on macOS. */
 function shortcutLabel(keys: string): string {
-  return IS_MAC ? keys.replace("Mod", "⌘").replace("Alt", "⌥") : keys.replace("Mod", "Ctrl");
+  if (!IS_MAC) return keys.replace("Mod", "Ctrl");
+  const symbols: Record<string, string> = { Mod: "⌘", Shift: "⇧", Alt: "⌥" };
+  return keys
+    .split("+")
+    .map((key) => symbols[key] ?? key)
+    .join("");
 }
 
 /** The aria-keyshortcuts form, e.g. "Control+Shift+S" or "Meta+B". */
@@ -32,13 +39,20 @@ function ariaShortcut(keys: string): string {
   return keys.replace("Mod", IS_MAC ? "Meta" : "Control");
 }
 
-/** Bare hosts like "example.com" get https://; otherwise they'd be stored as relative links. */
+/**
+ * Bare hosts like "example.com" or "localhost:3000" get https:// (otherwise they'd be stored as
+ * relative links, or "localhost:" would be read as a scheme); bare emails get mailto:.
+ */
 function normalizeHref(input: string): string {
   const href = input.trim();
-  const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(href);
-  if (href === "" || hasScheme || href.startsWith("/") || href.startsWith("#")) return href;
-  return `https://${href}`;
+  if (href === "" || href.startsWith("/") || href.startsWith("#")) return href;
+  if (/^[^\s@/:]+@[^\s@/]+\.[^\s@/]+$/.test(href)) return `mailto:${href}`;
+  const hasScheme = /^[a-z][a-z0-9+.-]*:(?!\d+(?:[/?#]|$))/i.test(href);
+  return hasScheme ? href : `https://${href}`;
 }
+
+/** A scheme with nothing after it, like the untouched "https://" default. */
+const isSchemeOnly = (href: string) => /^[a-z][a-z0-9+.-]*:\/*$/i.test(href);
 
 // Keep focus (and the selection) in the editor when a toolbar button is clicked.
 const keepEditorFocus = (event: MouseEvent) => event.preventDefault();
@@ -48,7 +62,8 @@ type ToolProps = {
   label: string;
   /** StarterKit's own shortcut, shown in the tooltip; "Mod" becomes Ctrl or ⌘, "Alt" ⌥ on Mac. */
   keys?: string;
-  onClick: () => void;
+  /** `fromKeyboard` is true for Enter/Space activation (no pointer), which keeps focus here. */
+  onClick: (fromKeyboard: boolean) => void;
   active?: boolean;
   disabled?: boolean;
 };
@@ -64,7 +79,7 @@ function Tool({ icon: Icon, label, keys, onClick, active, disabled }: ToolProps)
       aria-pressed={active}
       disabled={disabled}
       onMouseDown={keepEditorFocus}
-      onClick={onClick}
+      onClick={(event) => onClick(event.detail === 0)}
     >
       <Icon size={18} aria-hidden />
     </button>
@@ -107,34 +122,39 @@ export function Toolbar({ editor }: { editor: Editor }) {
     }),
   });
 
-  const chain = () => editor.chain().focus();
+  // Mouse clicks return focus to the editor; keyboard activation leaves it on the toolbar so the
+  // next control is one Tab away. Either way the command applies to the editor's selection.
+  const chain = (fromKeyboard = false) => (fromKeyboard ? editor.chain() : editor.chain().focus());
 
   function setBlockStyle(value: string) {
     if (value === "p") chain().setParagraph().run();
     else chain().setHeading({ level: Number(value) as HeadingLevel }).run();
   }
 
-  function editLink() {
+  function editLink(fromKeyboard: boolean) {
     const current = editor.getAttributes("link").href as string | undefined;
+    // Extend over the link whose URL the prompt shows. Between two adjacent links, a bare
+    // extendMarkRange("link") would pick the other one.
+    const which = current === undefined ? undefined : { href: current };
     const input = window.prompt("Link URL (leave empty to remove)", current ?? "https://");
     if (input === null) return;
     const href = normalizeHref(input);
-    if (href === "https://") return; // the untouched default
+    if (isSchemeOnly(href)) return; // e.g. the untouched "https://" default
     if (href === "") {
-      chain().extendMarkRange("link").unsetLink().run();
+      chain(fromKeyboard).extendMarkRange("link", which).unsetLink().run();
       return;
     }
     // Check first: a refused setLink would still apply extendMarkRange's selection change.
-    if (!editor.can().chain().extendMarkRange("link").setLink({ href }).run()) {
+    if (!editor.can().chain().extendMarkRange("link", which).setLink({ href }).run()) {
       window.alert(`"${href}" isn't an allowed link.`);
       return;
     }
-    chain().extendMarkRange("link").setLink({ href }).run();
+    chain(fromKeyboard).extendMarkRange("link", which).setLink({ href }).run();
   }
 
   // unsetAllMarks() does nothing at a collapsed cursor, so also drop marks queued for typing.
-  function clearFormatting() {
-    chain()
+  function clearFormatting(fromKeyboard: boolean) {
+    chain(fromKeyboard)
       .unsetAllMarks()
       .clearNodes()
       .command(({ tr }) => {
@@ -148,8 +168,8 @@ export function Toolbar({ editor }: { editor: Editor }) {
     <div className="toolbar-row">
       {/* role="group", not "toolbar": every control is a plain tab stop (no arrow-key roving). */}
       <div className="toolbar" role="group" aria-label="Formatting">
-        <Tool icon={Undo2} label="Undo" keys="Mod+Z" onClick={() => chain().undo().run()} disabled={!state.canUndo} />
-        <Tool icon={Redo2} label="Redo" keys="Mod+Shift+Z" onClick={() => chain().redo().run()} disabled={!state.canRedo} />
+        <Tool icon={Undo2} label="Undo" keys="Mod+Z" onClick={(k) => chain(k).undo().run()} disabled={!state.canUndo} />
+        <Tool icon={Redo2} label="Redo" keys="Mod+Shift+Z" onClick={(k) => chain(k).redo().run()} disabled={!state.canRedo} />
         <Divider />
         <select
           className="tool-select"
@@ -170,11 +190,11 @@ export function Toolbar({ editor }: { editor: Editor }) {
           ))}
         </select>
         <Divider />
-        <Tool icon={Bold} label="Bold" keys="Mod+B" onClick={() => chain().toggleBold().run()} active={state.bold} disabled={!state.canBold} />
-        <Tool icon={Italic} label="Italic" keys="Mod+I" onClick={() => chain().toggleItalic().run()} active={state.italic} disabled={!state.canItalic} />
-        <Tool icon={Underline} label="Underline" keys="Mod+U" onClick={() => chain().toggleUnderline().run()} active={state.underline} disabled={!state.canUnderline} />
-        <Tool icon={Strikethrough} label="Strikethrough" keys="Mod+Shift+S" onClick={() => chain().toggleStrike().run()} active={state.strike} disabled={!state.canStrike} />
-        <Tool icon={Code} label="Inline code" keys="Mod+E" onClick={() => chain().toggleCode().run()} active={state.code} disabled={!state.canCode} />
+        <Tool icon={Bold} label="Bold" keys="Mod+B" onClick={(k) => chain(k).toggleBold().run()} active={state.bold} disabled={!state.canBold} />
+        <Tool icon={Italic} label="Italic" keys="Mod+I" onClick={(k) => chain(k).toggleItalic().run()} active={state.italic} disabled={!state.canItalic} />
+        <Tool icon={Underline} label="Underline" keys="Mod+U" onClick={(k) => chain(k).toggleUnderline().run()} active={state.underline} disabled={!state.canUnderline} />
+        <Tool icon={Strikethrough} label="Strikethrough" keys="Mod+Shift+S" onClick={(k) => chain(k).toggleStrike().run()} active={state.strike} disabled={!state.canStrike} />
+        <Tool icon={Code} label="Inline code" keys="Mod+E" onClick={(k) => chain(k).toggleCode().run()} active={state.code} disabled={!state.canCode} />
         <Divider />
         <Tool
           icon={LinkIcon}
@@ -184,12 +204,12 @@ export function Toolbar({ editor }: { editor: Editor }) {
           disabled={!state.link && (state.selectionEmpty || !state.canLink)}
         />
         <Divider />
-        <Tool icon={List} label="Bulleted list" keys="Mod+Shift+8" onClick={() => chain().toggleBulletList().run()} active={state.bulletList} disabled={!state.canBulletList} />
-        <Tool icon={ListOrdered} label="Numbered list" keys="Mod+Shift+7" onClick={() => chain().toggleOrderedList().run()} active={state.orderedList} disabled={!state.canOrderedList} />
+        <Tool icon={List} label="Bulleted list" keys="Mod+Shift+8" onClick={(k) => chain(k).toggleBulletList().run()} active={state.bulletList} disabled={!state.canBulletList} />
+        <Tool icon={ListOrdered} label="Numbered list" keys="Mod+Shift+7" onClick={(k) => chain(k).toggleOrderedList().run()} active={state.orderedList} disabled={!state.canOrderedList} />
         <Divider />
-        <Tool icon={Quote} label="Quote" keys="Mod+Shift+B" onClick={() => chain().toggleBlockquote().run()} active={state.blockquote} disabled={!state.canBlockquote} />
-        <Tool icon={SquareCode} label="Code block" keys="Mod+Alt+C" onClick={() => chain().toggleCodeBlock().run()} active={state.codeBlock} disabled={!state.canCodeBlock} />
-        <Tool icon={Minus} label="Horizontal line" onClick={() => chain().setHorizontalRule().run()} disabled={!state.canHorizontalRule} />
+        <Tool icon={Quote} label="Quote" keys="Mod+Shift+B" onClick={(k) => chain(k).toggleBlockquote().run()} active={state.blockquote} disabled={!state.canBlockquote} />
+        <Tool icon={SquareCode} label="Code block" keys="Mod+Alt+C" onClick={(k) => chain(k).toggleCodeBlock().run()} active={state.codeBlock} disabled={!state.canCodeBlock} />
+        <Tool icon={Minus} label="Horizontal line" onClick={(k) => chain(k).setHorizontalRule().run()} disabled={!state.canHorizontalRule} />
         <Divider />
         <Tool icon={RemoveFormatting} label="Clear formatting" onClick={clearFormatting} />
       </div>
