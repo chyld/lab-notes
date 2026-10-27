@@ -519,10 +519,11 @@ height, colors.
 and rendered as `<mark data-color="#ffe967" style="background-color: #ffe967; color: inherit">`
 (Tiptap drops invalid CSS values). Clear formatting removes it like any mark.
 
-- `Ctrl+Shift+H` (⌘⇧H on macOS) toggles **Yellow**: the extension's shortcut is overridden to
-  `toggleHighlight({ color: Yellow })`, because the stock colorless toggle merges in the color of
-  the highlight around the cursor, even one just removed with None. On text highlighted another
-  color it switches it to Yellow; on Yellow text it removes it.
+- `Ctrl+Shift+H` (⌘⇧H on macOS) toggles **Yellow**, judged by `markAt(editor, "highlight")`: on
+  Yellow text, or a colorless highlight (which shows as Yellow), it runs `unsetHighlight()`;
+  otherwise `setHighlight({ color: Yellow })`, so text highlighted another color switches to
+  Yellow. The stock shortcut (`toggleHighlight()` with no color) is replaced because it merges in
+  the color of the highlight around the cursor, even one just removed with None.
 - The `==text==` input and paste rules are kept (like StarterKit's Markdown rules); they add a
   highlight with no color, which CSS shows as Yellow and the toolbar treats as Yellow.
 - Pasted `<mark>`s keep their own color, even one outside the palette: the button's bar shows it
@@ -552,13 +553,15 @@ palette avoids, so every swatch is also named (tooltip and `aria-label`).
 **Highlight picker** (`HighlightPicker.tsx`), in the marks group after Inline code:
 
 - A button with the `Highlighter` icon and a 3px bar under it in the highlight color at the
-  selection (no bar when there's none). `aria-label="Highlight color"`, `title="Highlight color"`,
+  selection (no bar when there's none; set as `background-color`, so a pasted color value can't
+  load a `url()`). `aria-label="Highlight color"`, `title="Highlight color"`,
   `aria-haspopup="dialog"`, `aria-expanded`. Disabled where `editor.can().setHighlight()` is false
   (code blocks, inline code).
 - "At the selection" uses `markAt(editor, "highlight")` (`editor.ts`), the same rules as
   `textStyleAt` (which becomes `markAt(editor, "textStyle")?.attrs ?? {}`): stored marks at a
   cursor (even an empty set after Clear formatting), else the marks there; for a range, the marks
-  of the node at its start.
+  of its first inline node (so after Select All it reads the first text, not the first
+  paragraph, which has no marks).
 - Clicking opens a popover (`role="dialog"`, `aria-label="Highlight colors"`) under the button,
   positioned and dismissed exactly like the font picker's (`popover.ts`, shared): portal on
   `document.body`, `position: fixed`; closes on Esc (refocusing the editor), an outside click,
@@ -596,14 +599,15 @@ have no text, so the title rule skips them.
   through every edit made meanwhile (text typed at its edges stays outside it). It uploads the
   files (`uploadImage`, in parallel; types other than PNG/JPEG/GIF/WebP come back as 415
   "Unsupported image type").
-- When all have settled, one transaction (one undo step) removes the placeholder and, if any
-  upload succeeded, inserts the images in clipboard order with `replaceRangeWith` (which moves out
+- When all have settled, one transaction removes the placeholder and, if any upload succeeded, inserts the images in clipboard order with `replaceRangeWith` (which moves out
   of a paragraph's start/end, replaces an empty paragraph, and splits a line mid-way). The pasted-
   over selection is replaced only if its content is unchanged; if the user edited it meanwhile,
   the images go after it instead. If the selection is still the pasted range, the cursor ends up
   right after the images (a paragraph is added after them if no textblock follows), so typing
   continues below; otherwise the user's selection is left alone. Failed uploads are reported with
-  `alert`; if every upload failed, the document is untouched. If the editor was destroyed
+  `alert`; if every upload failed, the document is untouched. The insertion is its own undo step:
+  `closeHistory` is set on it and on an empty transaction right after, so ProseMirror's history
+  doesn't merge it with typing done within 500ms before or after. If the editor was destroyed
   meanwhile (the user left), nothing happens.
 - The placeholder is a decoration, not content: it is never saved. A Save during an upload saves
   the note without the pending images; inserting them makes the note dirty again (leaving before
