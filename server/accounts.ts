@@ -31,9 +31,13 @@ export function firstAccountClaim(db: Db): number | null {
 
 /**
  * Creates an account. The first account also gets everything saved before accounts existed, in
- * the same transaction. Returns how many of those notes it got (0 for later accounts).
+ * the same transaction. Says whether it was the first, and how many of those notes it got.
  */
-export async function createAccount(db: Db, username: string, password: string): Promise<number> {
+export async function createAccount(
+  db: Db,
+  username: string,
+  password: string,
+): Promise<{ first: boolean; notes: number }> {
   const name = checkUsername(username);
   checkPassword(password);
   const hash = await hashPassword(password); // before the transaction: it takes a moment
@@ -42,7 +46,7 @@ export async function createAccount(db: Db, username: string, password: string):
     const first = db.countUsers() === 0;
     const id = randomUUID();
     db.insertUser({ id, username: name, password_hash: hash, created_at: new Date().toISOString() });
-    return first ? db.claimLegacyData(id) : 0;
+    return { first, notes: first ? db.claimLegacyData(id) : 0 };
   });
 }
 

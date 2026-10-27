@@ -88,7 +88,10 @@ export async function verifyPassword(password: string, stored: string): Promise<
 // the same parameters), so the response time doesn't tell which usernames exist.
 let dummyHash: Promise<string> | null = null;
 export function dummyPasswordHash(): Promise<string> {
-  dummyHash ??= hashPassword(randomBytes(16).toString("base64"));
+  dummyHash ??= hashPassword(randomBytes(16).toString("base64")).catch((err: unknown) => {
+    dummyHash = null; // try again next time
+    throw err;
+  });
   return dummyHash;
 }
 
@@ -112,11 +115,13 @@ export const expiryCutoff = (now: number) => new Date(now - SESSION_MS).toISOStr
 /** The session token from a `Cookie` header, if there's one that could be ours. */
 export function readSessionCookie(header: string | undefined): string | null {
   if (!header) return null;
+  // The first well-formed one: a malformed duplicate (another app on this host setting the same
+  // name) can't hide the real session.
   for (const part of header.split(";")) {
     const eq = part.indexOf("=");
     if (eq < 0 || part.slice(0, eq).trim() !== SESSION_COOKIE) continue;
     const value = part.slice(eq + 1).trim();
-    return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
+    if (/^[A-Za-z0-9_-]{43}$/.test(value)) return value;
   }
   return null;
 }

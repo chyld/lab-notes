@@ -233,7 +233,7 @@ accounts start empty. Nothing else ever reads a note without an owner.
 
 All migrations run together in one `BEGIN IMMEDIATE` transaction that re-reads `PRAGMA table_info`
 inside it, so the server and the command line starting at the same moment can't both try to add a
-column. `openDb` also sets `PRAGMA busy_timeout = 5000`: the two processes share the file, and a
+column. `openDb` also sets `PRAGMA busy_timeout = 5000`, first, before even switching to WAL: the two processes share the file, and a
 write that meets the other's lock waits up to 5 seconds instead of failing at once.
 
 ```sql
@@ -276,8 +276,13 @@ can overflow the call stack.
 All under `/api`, JSON in and out, except image bytes (below). Note POST/PUT require
 `Content-Type: application/json`.
 
-**Signed in:** every request whose path (query string stripped) starts with `/api/`, except
-exactly `/api/auth/status`, `/api/auth/login`, and `/api/auth/logout`, needs a session (the
+**Signed in:** every request for an `/api/` path, except exactly `/api/auth/status`,
+`/api/auth/login`, and `/api/auth/logout`, needs a session. "An `/api/` path" is judged by the
+route the router matched (it decodes the path first, so `/%61pi/notes` is the notes route), or
+for an unmatched path by the path as sent and decoded-and-lowercased (`/api%2Fnotes`, `/API/notes`
+count; one `apiPath(request)` rule shared with the not-found handler, which answers those with
+JSON, never the app's page). A handler that somehow ran without a user answers `401` rather than
+running for nobody. The session (the
 `lab_notes_session` cookie; see [Accounts and sign-in](#accounts-and-sign-in)). A root `onRequest`
 hook, registered before the routes and the image plugin, checks it, so it runs before body
 parsing and validation and also covers unknown `/api` paths (it runs for the not-found handler
@@ -290,10 +295,12 @@ param over the router's limit is still the router's `414`, before any hook.)
 as) on every request. If it's present and isn't the session's user (someone signed in as
 somebody else in another tab of this browser, so the cookie changed underneath), the request is
 refused with `409 { error: "Someone else signed in on this browser. Reload this page." }` before
-anything is read or written: a stale tab can never save into, or list, the other account. (Image
+anything is read or written (not even the other user's session is re-stamped): a stale tab can
+never save into, or list, the other account. (Image
 `<img>` loads can't send headers; they don't need to.)
 
-**No caching:** every `/api` JSON response is `Cache-Control: no-store` (images keep theirs), so
+**No caching:** every `/api` JSON response is `Cache-Control: no-store` (images keep theirs; the
+router's own errors, e.g. a malformed `%`-escape, too), so
 the browser's Back button after signing out can't bring back cached notes. Notes and favorite fonts are the signed-in user's own: lists and searches cover only
 their notes, and another user's note id is a `404` exactly like a missing one (its existence
 isn't revealed). This is enforced in SQL, not by checking afterwards: the list and search
@@ -1168,8 +1175,9 @@ block the server), with N = 2¹⁵, r = 8, p = 1, a 16-byte random salt, and a 3
 `scrypt$32768$8$1$<salt>$<hash>` (base64). `maxmem` is 64 MiB: those parameters need exactly 32
 MiB, which is Node's default limit, and the call fails at the limit. Verifying recomputes with
 the stored parameters and compares with `timingSafeEqual`. A sign-in for a username that doesn't
-exist still runs one scrypt, against a dummy hash made at startup with the same parameters, so
-the response time doesn't tell which usernames exist. Rules: 8 to 1024 characters (code points);
+exist still runs one scrypt, against a dummy hash made at startup (`buildApp` starts it, so even
+the first such sign-in costs one hash, not two) with the same parameters, so the response time
+doesn't tell which usernames exist. Rules: 8 to 1024 characters (code points);
 anything else is allowed (spaces, symbols, any language). Passwords are NFC-normalized when set
 and when checked (so the same password typed on a Mac, which may produce decomposed accents,
 still matches), and otherwise used as typed (no trimming).
@@ -1196,8 +1204,9 @@ still matches), and otherwise used as typed (no trimming).
   over an hour ago updates `last_seen_at` and re-sends the cookie (a sliding 30 days; at most one
   write per hour per session). An expired session is deleted when it's presented; startup also
   deletes every expired session.
-- The `Cookie` header is parsed by hand (one cookie, no dependency); a malformed or unknown token
-  is just "no session".
+- The `Cookie` header is parsed by hand (no dependency): the first well-formed
+  `lab_notes_session` value counts, so a malformed duplicate (another app on this host using the
+  name) can't hide the real one; a malformed or unknown token is just "no session".
 - CSRF: the cookie is `SameSite=Lax`, so another site's `POST`, `PUT`, or `DELETE` never carries
   it. Another *origin* on the same site (another port, a sibling subdomain) does get the cookie,
   but every write is a request a page can't make cross-origin without a CORS preflight, which
@@ -1208,8 +1217,12 @@ still matches), and otherwise used as typed (no trimming).
   is cleared).
 
 **Sign-in** (`POST /api/auth/login`, JSON `{ username, password }`, both strings, username at most
-100 and password at most 1024 characters, else `400`): a match → a new session, its cookie, and
-`200 { username }`. No match (unknown user or wrong password) → `401 { error: "Wrong username or
+100 and password at most 4096 code points, else `400`; 4096 leaves room for a 1024-character
+password typed with decomposed accents, the real limit being checked when it's set): a match → a
+new session, its cookie, and `200 { username }`. Re-reading the password hash and creating the
+session happen in one `BEGIN IMMEDIATE` transaction, so if `passwd` changed the password while it
+was being checked, the old one gets `401` instead of a session; expired sessions are purged there
+too. No match (unknown user or wrong password) → `401 { error: "Wrong username or
 password" }`, the same either way. **Rate limit:** at most 10 sign-in attempts that haven't
 succeeded per client IP (`request.ip`) in any 15 minutes; past that → `429 { error: "Too many
 sign-in attempts. Try again in a few minutes." }` without checking the password. An attempt is
@@ -1254,11 +1267,12 @@ fresh on every request, so a new account can sign in at once):
 
 Passwords are never command-line arguments (they'd show in `ps` and the shell history). With a
 terminal (`docker compose exec` gives one by default), the prompt doesn't echo what's typed (raw
-mode, restored on every way out: success, an error, a mismatch, Ctrl+C): Enter (`\r` or `\n`) ends it, Backspace removes the last character
+mode, switched on before the prompt is shown so a fast paste never echoes, and restored on every
+way out: success, an error, a mismatch, Ctrl+C): Enter (`\r` or `\n`) ends it, Backspace removes the last character
 (code point), Ctrl+C aborts (exit 130), Ctrl+D ends it, and pasted text arrives in chunks and is
-taken whole. Without one (stdin piped, e.g. `printf '%s\n' "$PW" | docker compose exec -T app
+taken whole (a paste of both answers at once fills both). Ctrl+D at the `[y/N]` question is a no. Without one (stdin piped, e.g. `printf '%s\n' "$PW" | docker compose exec -T app
 node server/users.ts add bob`), the first line of stdin is the password (only a trailing `\r?\n`
-stripped), asked once. Errors (bad or taken username,
+stripped), asked once, and read as soon as that line arrives (the pipe may stay open). Errors (bad or taken username,
 unknown user, password too short or long, the two entries differing, a missing or extra
 argument) print one line to stderr and exit 1; `--help` or no arguments print the usage.
 `package.json` gets `"users": "node server/users.ts"`.
@@ -1482,7 +1496,7 @@ rule uses them; where other sections of this spec name older colors (Google blue
 |---|---|---|
 | `PORT` | `5555` | Port the server listens on (bound to `0.0.0.0`). In dev, the Vite proxy targets it too. |
 | `DATA_DIR` | `./data` | Directory holding `notes.db` |
-| `TRUST_PROXY` | unset | The reverse proxy's own address(es), comma-separated: IPs, CIDR ranges, or `proxy-addr`'s keywords (`loopback`, `linklocal`, `uniquelocal`), e.g. `172.18.0.1` or `10.0.0.0/8`. Passed to Fastify's `trustProxy` as that string: only a connection *from* one of them has its `X-Forwarded-For` (the client IP for the sign-in rate limit) and `X-Forwarded-Proto` (HTTPS, for the cookie's `Secure`) believed; nothing a client sends directly is. (A hop count won't do: this Fastify deliberately ignores the headers for numeric trust, since it can't check who's talking.) Unset or empty: no proxy; the headers are ignored. A value `proxy-addr` can't compile exits at startup with one error line (like `PORT`). Prefer the proxy's exact address over a wide range like `uniquelocal`, which would also trust every LAN client that can reach the port directly; or publish the port only to the proxy (e.g. `127.0.0.1:${PORT}:5555` in `compose.yaml`). |
+| `TRUST_PROXY` | unset | The reverse proxy's own address(es), comma-separated: IPs, CIDR ranges, or `proxy-addr`'s keywords (`loopback`, `linklocal`, `uniquelocal`), e.g. `172.18.0.1` or `10.0.0.0/8`. Passed to Fastify's `trustProxy` as that string: only a connection *from* one of them has its `X-Forwarded-For` (the client IP for the sign-in rate limit) and `X-Forwarded-Proto` (HTTPS, for the cookie's `Secure`) believed; nothing a client sends directly is. (A hop count won't do: this Fastify deliberately ignores the headers for numeric trust, since it can't check who's talking.) Unset or empty: no proxy; the headers are ignored. A value `proxy-addr` can't compile exits at startup with one error line (like `PORT`); it's checked on its own first, so other startup errors aren't blamed on it. Prefer the proxy's exact address over a wide range like `uniquelocal`, which would also trust every LAN client that can reach the port directly; or publish the port only to the proxy (e.g. `127.0.0.1:${PORT}:5555` in `compose.yaml`). |
 
 Empty values count as unset. A `PORT` that is not an integer from 1 to 65535 exits at startup with
 one clear error line.

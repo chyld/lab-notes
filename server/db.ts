@@ -50,10 +50,10 @@ export function openDb(path: string) {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
 
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode = WAL;");
   // The server and the accounts command line share the file: a write that meets the other's lock
-  // waits for it instead of failing at once.
+  // waits for it instead of failing at once. First, so even switching to WAL below waits.
   db.exec("PRAGMA busy_timeout = 5000;");
+  db.exec("PRAGMA journal_mode = WAL;");
   db.exec(`
     CREATE TABLE IF NOT EXISTS notes (
       id         TEXT PRIMARY KEY,

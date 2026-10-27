@@ -17,6 +17,9 @@ Passwords are asked for, never given as arguments. Piped input: the first line i
 /** Exits with code 130 from Ctrl+C at a prompt (raw mode turns it into a byte, not a signal). */
 class Interrupted extends Error {}
 
+/** Typed after the end of one answer, for the next question. */
+let leftover = "";
+
 /**
  * Reads a password without echoing it. With a terminal: raw mode (restored on every way out);
  * Enter ends it, Backspace removes the last character, Ctrl+C aborts, Ctrl+D ends it, and pasted
@@ -25,30 +28,46 @@ class Interrupted extends Error {}
 async function askPassword(prompt: string): Promise<string> {
   const stdin = process.stdin;
   if (!stdin.isTTY) return firstLine();
-  process.stderr.write(prompt);
+  // Echo off before the prompt shows: a fast paste can't land while it's still on.
   stdin.setRawMode(true);
-  stdin.resume();
-  stdin.setEncoding("utf8");
   try {
+    process.stderr.write(prompt);
+    stdin.resume();
+    stdin.setEncoding("utf8");
     return await new Promise<string>((resolve, reject) => {
       let typed = "";
-      const onData = (chunk: string) => {
-        for (const char of chunk) {
+      // Feeds typed characters; true once the answer is complete. Whatever came after the line's
+      // end (a paste of both answers at once) is kept for the next question.
+      const feed = (text: string): boolean => {
+        const chars = [...text];
+        for (let i = 0; i < chars.length; i++) {
+          const char = chars[i];
           if (char === "\r" || char === "\n" || char === "\u0004") {
+            const rest = chars.slice(char === "\r" && chars[i + 1] === "\n" ? i + 2 : i + 1);
+            leftover = rest.join("");
             stdin.off("data", onData);
             process.stderr.write("\n");
-            return resolve(typed);
+            resolve(typed);
+            return true;
           }
           if (char === "\u0003") {
             stdin.off("data", onData);
             process.stderr.write("\n");
-            return reject(new Interrupted());
+            reject(new Interrupted());
+            return true;
           }
           if (char === "\u007f" || char === "\b") typed = [...typed].slice(0, -1).join("");
           else typed += char;
         }
+        return false;
+      };
+      const onData = (chunk: string) => {
+        feed(chunk);
       };
       stdin.on("data", onData);
+      const pending = leftover;
+      leftover = "";
+      if (pending) feed(pending);
     });
   } finally {
     stdin.setRawMode(false);
@@ -56,18 +75,39 @@ async function askPassword(prompt: string): Promise<string> {
   }
 }
 
-// Piped: everything read so far, split into lines, so a second question gets the next line.
-let piped: Promise<string[]> | null = null;
-async function firstLine(): Promise<string> {
-  piped ??= (async () => {
-    let text = "";
-    process.stdin.setEncoding("utf8");
-    for await (const chunk of process.stdin) text += chunk;
-    return text.split("\n");
-  })();
-  const lines = await piped;
-  // Only the line ending is stripped; spaces are part of the password.
-  return (lines.shift() ?? "").replace(/\r$/, "");
+// Piped: answers as soon as a line arrives (the pipe may stay open, e.g. `docker compose exec -T`
+// typed into), keeping what came after it for a next question.
+let buffered = "";
+let ended = false;
+function firstLine(): Promise<string> {
+  const stdin = process.stdin;
+  stdin.setEncoding("utf8");
+  return new Promise((resolve) => {
+    const take = () => {
+      const newline = buffered.indexOf("\n");
+      if (newline < 0 && !ended) return false;
+      const line = newline < 0 ? buffered : buffered.slice(0, newline);
+      buffered = newline < 0 ? "" : buffered.slice(newline + 1);
+      stdin.off("data", onData);
+      stdin.off("end", onEnd);
+      stdin.pause();
+      // Only the line ending is stripped; spaces are part of the password.
+      resolve(line.replace(/\r$/, ""));
+      return true;
+    };
+    const onData = (chunk: string) => {
+      buffered += chunk;
+      take();
+    };
+    const onEnd = () => {
+      ended = true;
+      take();
+    };
+    if (take()) return;
+    stdin.on("data", onData);
+    stdin.on("end", onEnd);
+    stdin.resume();
+  });
 }
 
 /** Asks twice with a terminal (a typo would lock you out), once when piped. */
@@ -84,7 +124,11 @@ async function confirm(question: string): Promise<boolean> {
   process.stderr.write(question);
   process.stdin.setEncoding("utf8");
   process.stdin.resume();
-  const answer = await new Promise<string>((resolve) => process.stdin.once("data", (data) => resolve(String(data))));
+  // Ctrl+D (end of input) is a "no".
+  const answer = await new Promise<string>((resolve) => {
+    process.stdin.once("data", (data) => resolve(String(data)));
+    process.stdin.once("end", () => resolve(""));
+  });
   process.stdin.pause();
   return /^\s*y(es)?\s*$/i.test(answer);
 }
@@ -134,8 +178,9 @@ async function main(args: string[]): Promise<number> {
         }
       }
       const password = await newPassword();
-      const claimed = await createAccount(db, username, password);
-      console.log(claim === null ? `Created ${username}.` : `Created ${username} (${plural(claimed, "existing note")}).`);
+      // What the transaction did, not what was true before the prompts (another add may have won).
+      const created = await createAccount(db, username, password);
+      console.log(created.first ? `Created ${username} (${plural(created.notes, "existing note")}).` : `Created ${username}.`);
       return 0;
     }
 

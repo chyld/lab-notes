@@ -47,12 +47,32 @@ const TOO_MANY = "Too many sign-in attempts. Try again in a few minutes.";
 // The only /api paths that don't need a session.
 const PUBLIC_API = new Set(["/api/auth/status", "/api/auth/login", "/api/auth/logout"]);
 
+/**
+ * The /api path a request is for, or null if it's a page or a file. Judged by the route the router
+ * matched (it decodes the path first, so `/%61pi/notes` is the notes route); for an unmatched
+ * path, by the path decoded and lowercased too, so `/api%2Fnotes` or `/API/notes` count as API.
+ */
+function apiPath(request: FastifyRequest): string | null {
+  const route = request.routeOptions.url;
+  if (route !== undefined) return route.startsWith("/api/") ? route : null;
+  const raw = request.url.split("?", 1)[0];
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw).toLowerCase();
+  } catch {
+    // a malformed escape: judge it as written
+  }
+  return [raw, decoded].find((p) => p === "/api" || p.startsWith("/api/")) ?? null;
+}
+
 const loginBody = {
   type: "object",
   required: ["username", "password"],
   properties: {
     username: { type: "string", minLength: 1, maxLength: 100 },
-    password: { type: "string", minLength: 1, maxLength: 1024 },
+    // Room for 1024 characters even typed decomposed (an accent as two code points): the real
+    // limit is checked on the normalized password when it's set.
+    password: { type: "string", minLength: 1, maxLength: 4096 },
   },
 } as const;
 
@@ -146,20 +166,24 @@ export function buildApp({ dbPath, staticDir, logger = false, trustProxy }: AppO
     ajv: { customOptions: { coerceTypes: false } },
     // Errors raised before routing (e.g. a malformed %-escape) also use the { error } shape.
     frameworkErrors: (err, _request, reply) => {
-      (reply as FastifyReply).code(err.statusCode ?? 400).send({ error: err.message });
+      (reply as FastifyReply).code(err.statusCode ?? 400).header("Cache-Control", "no-store").send({ error: err.message });
     },
   });
   const db = openDb(dbPath);
   app.decorate("db", db);
   app.addHook("onClose", async () => db.close());
   db.deleteExpiredSessions(expiryCutoff(Date.now()));
+  void dummyPasswordHash(); // made now, so the first unknown-user sign-in isn't slower than the rest
 
   // Sessions (see SPEC "Accounts and sign-in"). Over plain http on the LAN a Secure cookie would be
   // dropped, so it's only Secure over https (as reported by a trusted proxy, if any).
   const secure = (request: FastifyRequest) => request.protocol === "https";
 
-  /** The request's signed-in user, re-stamping (and re-sending) a session last seen over an hour ago. */
-  function sessionFor(request: FastifyRequest, reply: FastifyReply): SessionUser | null {
+  /**
+   * The request's session, if it has a live one. `touch()` re-stamps (and re-sends) one last seen
+   * over an hour ago: called only once the request is accepted, so a refused one writes nothing.
+   */
+  function sessionFor(request: FastifyRequest, reply: FastifyReply): (SessionUser & { touch: () => void }) | null {
     const token = readSessionCookie(request.headers.cookie);
     if (!token) return null;
     const tokenHash = hashToken(token);
@@ -170,32 +194,42 @@ export function buildApp({ dbPath, staticDir, logger = false, trustProxy }: AppO
       db.deleteSession(tokenHash);
       return null;
     }
-    if (sessionStale(row.last_seen_at, now)) {
+    const touch = () => {
+      if (!sessionStale(row.last_seen_at, now)) return;
       db.touchSession(tokenHash, new Date(now).toISOString());
       reply.header("Set-Cookie", sessionCookie(token, secure(request)));
-    }
-    return { id: row.user_id, username: row.username };
+    };
+    return { id: row.user_id, username: row.username, touch };
   }
 
   const users = new WeakMap<FastifyRequest, SessionUser>();
-  /** The signed-in user (the hook below has already turned everyone else away). */
-  const userOf = (request: FastifyRequest) => users.get(request)!;
+  /**
+   * The signed-in user, set by the hook below. Fails closed: a request that somehow got past it
+   * without one is a 401, never a handler running for nobody.
+   */
+  function userOf(request: FastifyRequest): SessionUser {
+    const user = users.get(request);
+    if (!user) throw Object.assign(new Error(SIGNED_OUT), { statusCode: 401 });
+    return user;
+  }
 
   // Every /api request but the three auth ones needs a session: checked first thing (before body
   // parsing and validation), and for unknown /api paths too. Pages and files never do.
   app.addHook("onRequest", async (request, reply) => {
-    const path = request.url.split("?", 1)[0];
-    if (!path.startsWith("/api/")) return;
+    const path = apiPath(request);
+    if (path === null) return;
     reply.header("Cache-Control", "no-store"); // Back after signing out can't show cached notes
     if (PUBLIC_API.has(path)) return;
-    const user = sessionFor(request, reply);
-    if (!user) return reply.code(401).send({ error: SIGNED_OUT });
-    // A tab signed in as someone else (the cookie changed under it): refuse before anything.
+    const session = sessionFor(request, reply);
+    if (!session) return reply.code(401).send({ error: SIGNED_OUT });
+    // A tab signed in as someone else (the cookie changed under it): refuse before anything is
+    // read or written (not even the other user's session is re-stamped).
     const expected = request.headers["x-lab-notes-user"];
-    if (typeof expected === "string" && expected !== user.username) {
+    if (typeof expected === "string" && expected !== session.username) {
       return reply.code(409).send({ error: OTHER_USER });
     }
-    users.set(request, user);
+    session.touch();
+    users.set(request, { id: session.id, username: session.username });
   });
 
   app.setErrorHandler((err: FastifyError, request, reply) => {
@@ -217,7 +251,7 @@ export function buildApp({ dbPath, staticDir, logger = false, trustProxy }: AppO
   app.setNotFoundHandler((request, reply) => {
     const isRead = request.method === "GET" || request.method === "HEAD";
     const path = request.url.split("?", 1)[0];
-    const isApi = path === "/api" || path.startsWith("/api/");
+    const isApi = apiPath(request) !== null; // an API miss is JSON, never the app's page
     const isFile = /\.[^/]*$/.test(path);
     if (serveStatic && isRead && !isApi && !isFile) {
       return reply.sendFile("index.html");
@@ -225,10 +259,11 @@ export function buildApp({ dbPath, staticDir, logger = false, trustProxy }: AppO
     return reply.code(404).send({ error: "Not found" });
   });
 
-  app.get("/api/auth/status", async (request, reply) => ({
-    username: sessionFor(request, reply)?.username ?? null,
-    hasAccounts: db.countUsers() > 0,
-  }));
+  app.get("/api/auth/status", async (request, reply) => {
+    const session = sessionFor(request, reply);
+    session?.touch();
+    return { username: session?.username ?? null, hasAccounts: db.countUsers() > 0 };
+  });
 
   const limiter = new SignInLimiter();
 
@@ -242,12 +277,20 @@ export function buildApp({ dbPath, staticDir, logger = false, trustProxy }: AppO
       // An unknown username still costs one scrypt, so timing doesn't reveal which ones exist.
       const ok = await verifyPassword(request.body.password, user?.password_hash ?? (await dummyPasswordHash()));
       if (!user || !ok) return reply.code(401).send({ error: WRONG_CREDENTIALS });
-      uncount();
-      // A session this browser already had is replaced, not kept alongside.
-      const previous = readSessionCookie(request.headers.cookie);
-      if (previous) db.deleteSession(hashToken(previous));
       const { token, hash } = newSessionToken();
-      db.insertSession(hash, user.id, new Date().toISOString());
+      // In one transaction with the session's creation: if `passwd` (another process, maybe) changed
+      // the password while it was being checked, the old one doesn't get a session.
+      const created = db.immediate(() => {
+        if (db.getUserByName(user.username)?.password_hash !== user.password_hash) return false;
+        db.deleteExpiredSessions(expiryCutoff(Date.now()));
+        // A session this browser already had is replaced, not kept alongside.
+        const previous = readSessionCookie(request.headers.cookie);
+        if (previous) db.deleteSession(hashToken(previous));
+        db.insertSession(hash, user.id, new Date().toISOString());
+        return true;
+      });
+      if (!created) return reply.code(401).send({ error: WRONG_CREDENTIALS });
+      uncount();
       reply.header("Set-Cookie", sessionCookie(token, secure(request)));
       return { username: user.username };
     },

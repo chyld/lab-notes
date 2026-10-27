@@ -130,6 +130,16 @@ test("every API route needs a session, checked before validation", async () => {
     assert.equal(res.statusCode, 401, `${method} ${url}`);
     assert.deepEqual(res.json(), { error: "You're signed out. Sign in again in another tab, then try again here." });
   }
+  // The router decodes the path before matching: an encoded /api is still checked.
+  for (const url of ["/%61pi/notes", "/%61pi/favorite-fonts", `/%61pi/images/${id}`, "/api/%6Eotes"]) {
+    const res = await app.inject({ method: "GET", url });
+    assert.equal(res.statusCode, 401, url);
+  }
+  // Encoded or differently-cased API paths count as API too: signed out, 401; never the app's page.
+  for (const url of ["/api%2Fnotes", "/API/notes"]) {
+    const res = await app.inject({ method: "GET", url });
+    assert.equal(res.statusCode, 401, url);
+  }
   // A garbage or unknown session is no session.
   for (const cookie of ["lab_notes_session=nope", `lab_notes_session=${"A".repeat(43)}`, "other=1"]) {
     const res = await app.inject({ method: "GET", url: "/api/notes", headers: { cookie } });
@@ -192,17 +202,29 @@ test("images revalidate: ETag, 304, private no-cache", async () => {
   assert.equal(out.statusCode, 401);
 });
 
-test("a tab signed in as someone else is refused (409)", async () => {
+test("a tab signed in as someone else is refused (409), writing nothing", async () => {
   const cookie = await session(app, "carol");
+  // Due for a re-stamp: a refused request still mustn't do it.
+  const tokenHash = hashToken(cookie.split("=")[1]);
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  app.db.touchSession(tokenHash, twoHoursAgo);
   const headers = { cookie, "x-lab-notes-user": "dave" };
   for (const [method, url] of [["GET", "/api/notes"], ["POST", "/api/notes"]] as const) {
     const res = await app.inject({ method, url, headers, payload: method === "POST" ? { content: doc("x") } : undefined });
     assert.equal(res.statusCode, 409, `${method} ${url}`);
     assert.deepEqual(res.json(), { error: "Someone else signed in on this browser. Reload this page." });
+    assert.equal(res.headers["set-cookie"], undefined);
   }
+  assert.equal(app.db.getSession(tokenHash)!.last_seen_at, twoHoursAgo);
   assert.deepEqual((await app.inject({ method: "GET", url: "/api/notes", headers: { cookie } })).json(), []);
   const same = await app.inject({ method: "GET", url: "/api/notes", headers: { cookie, "x-lab-notes-user": "carol" } });
   assert.equal(same.statusCode, 200);
+});
+
+test("a malformed duplicate session cookie doesn't hide the real one", async () => {
+  const cookie = await session(app, "dupe");
+  const res = await app.inject({ method: "GET", url: "/api/notes", headers: { cookie: `lab_notes_session=junk; ${cookie}` } });
+  assert.equal(res.statusCode, 200);
 });
 
 test("signing in again replaces the session the browser had", async () => {
@@ -337,9 +359,9 @@ test("the first account inherits everything from before accounts; later ones sta
 
   const upgraded = buildApp({ dbPath });
   assert.equal(firstAccountClaim(upgraded.db), 2);
-  assert.equal(await createAccount(upgraded.db, "chyld", PASSWORD), 2);
+  assert.deepEqual(await createAccount(upgraded.db, "chyld", PASSWORD), { first: true, notes: 2 });
   assert.equal(firstAccountClaim(upgraded.db), null);
-  assert.equal(await createAccount(upgraded.db, "guest", PASSWORD), 0);
+  assert.deepEqual(await createAccount(upgraded.db, "guest", PASSWORD), { first: false, notes: 0 });
 
   const owner = await session(upgraded, "chyld");
   const guest = await session(upgraded, "guest");
