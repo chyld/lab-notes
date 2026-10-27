@@ -15,6 +15,7 @@
   --accent-soft: #efeaff;
   --accent-softer: #f7f5ff;
   --danger: #c4234a;
+  --favorite: #d97706;
   /* Decorative (the top edge, the logo). */
   --gradient: linear-gradient(90deg, #6366f1 0%, #a855f7 55%, #ec4899 100%);
   /* Behind white text: every stop keeps white at 4.5:1 or more. */
@@ -729,28 +730,100 @@ button:disabled {
   scrollbar-width: thin;
 }
 
+.font-group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.font-group-heading {
+  padding: 10px 10px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .font-option {
-  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 10px;
   border-radius: var(--radius-sm);
   font-size: 18px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   cursor: pointer;
+}
+
+.font-option-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .font-option.active {
   background: var(--hover);
 }
 
-.font-option[aria-selected="true"] {
+.font-option.current {
   color: var(--accent-ink);
 }
 
-.font-empty {
+/* The favorite star: filled for a favorite; an outline only where it can be clicked next. */
+.font-star {
+  display: inline-flex;
+  flex: none;
+  padding: 3px;
+  border-radius: 6px;
+  color: var(--muted);
+  opacity: 0;
+}
+
+.font-option.active .font-star,
+.font-option:hover .font-star {
+  opacity: 1;
+}
+
+.font-star:hover {
+  color: var(--favorite);
+}
+
+.font-star.on {
+  color: var(--favorite);
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .font-star {
+    opacity: 0.5;
+  }
+}
+
+.font-empty,
+.font-error {
+  margin: 0;
   padding: 8px;
   color: var(--muted);
   font-size: 14px;
+}
+
+.font-error {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Line numbers: a gutter in the left margin, 1rem left of the text. */

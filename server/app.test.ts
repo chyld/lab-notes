@@ -445,3 +445,85 @@ test("backfills the search text of notes saved before search existed", async () 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("favorite fonts: add, list in the order added, remove; both idempotent", async () => {
+  const fresh = buildApp({ dbPath: ":memory:" });
+  const list = async () => (await fresh.inject({ method: "GET", url: "/api/favorite-fonts" })).json();
+  assert.deepEqual(await list(), []);
+
+  for (const family of ["Lobster", "Open Sans", "Roboto Mono"]) {
+    const res = await fresh.inject({ method: "PUT", url: `/api/favorite-fonts/${encodeURIComponent(family)}` });
+    assert.equal(res.statusCode, 204);
+    assert.equal(res.body, "");
+  }
+  assert.deepEqual(await list(), ["Lobster", "Open Sans", "Roboto Mono"]);
+
+  // Adding again keeps its place.
+  assert.equal((await fresh.inject({ method: "PUT", url: "/api/favorite-fonts/Lobster" })).statusCode, 204);
+  assert.deepEqual(await list(), ["Lobster", "Open Sans", "Roboto Mono"]);
+
+  assert.equal((await fresh.inject({ method: "DELETE", url: "/api/favorite-fonts/Open%20Sans" })).statusCode, 204);
+  assert.deepEqual(await list(), ["Lobster", "Roboto Mono"]);
+  assert.equal((await fresh.inject({ method: "DELETE", url: "/api/favorite-fonts/Open%20Sans" })).statusCode, 204);
+
+  // Re-adding puts it last.
+  await fresh.inject({ method: "PUT", url: "/api/favorite-fonts/Open%20Sans" });
+  assert.deepEqual(await list(), ["Lobster", "Roboto Mono", "Open Sans"]);
+  await fresh.close();
+});
+
+test("favorite fonts: rejects family names that aren't Google Fonts-shaped", async () => {
+  const fresh = buildApp({ dbPath: ":memory:" });
+  const long = Array.from({ length: 20 }, () => "Abcde").join(" "); // 119 characters
+  for (const family of ["Comic%2BSans", "%22x%22", "a-b", "%20Lobster", "Lobster%20", "Open%20%20Sans", "%C3%A9", encodeURIComponent(long)]) {
+    for (const method of ["PUT", "DELETE"] as const) {
+      const res = await fresh.inject({ method, url: `/api/favorite-fonts/${family}` });
+      assert.equal(res.statusCode, 400, `${method} ${family}`);
+      assert.equal(typeof res.json().error, "string");
+    }
+  }
+  assert.equal((await fresh.inject({ method: "PUT", url: "/api/favorite-fonts/" })).statusCode, 400);
+  // 100 characters, 198 once its spaces are encoded: still within the router's limit.
+  const longest = Array.from({ length: 50 }, () => "A").join(" ") + "B";
+  assert.equal(longest.length, 100);
+  const ok = await fresh.inject({ method: "PUT", url: `/api/favorite-fonts/${encodeURIComponent(longest)}` });
+  assert.equal(ok.statusCode, 204);
+  assert.deepEqual((await fresh.inject({ method: "GET", url: "/api/favorite-fonts" })).json(), [longest]);
+  await fresh.close();
+});
+
+test("favorite fonts: at most 200; existing ones can still be re-added and removed", async () => {
+  const fresh = buildApp({ dbPath: ":memory:" });
+  for (let i = 0; i < 200; i++) {
+    const res = await fresh.inject({ method: "PUT", url: `/api/favorite-fonts/Font${i}` });
+    assert.equal(res.statusCode, 204);
+  }
+  const over = await fresh.inject({ method: "PUT", url: "/api/favorite-fonts/Lobster" });
+  assert.equal(over.statusCode, 400);
+  assert.deepEqual(over.json(), { error: "Too many favorite fonts" });
+  assert.equal((await fresh.inject({ method: "PUT", url: "/api/favorite-fonts/Font7" })).statusCode, 204);
+  assert.equal((await fresh.inject({ method: "DELETE", url: "/api/favorite-fonts/Font7" })).statusCode, 204);
+  assert.equal((await fresh.inject({ method: "PUT", url: "/api/favorite-fonts/Lobster" })).statusCode, 204);
+  const list = (await fresh.inject({ method: "GET", url: "/api/favorite-fonts" })).json();
+  assert.equal(list.length, 200);
+  assert.equal(list.at(-1), "Lobster");
+  await fresh.close();
+});
+
+test("favorite fonts persist and an older database gets the table", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "lab-notes-fav-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dbPath = join(dir, "notes.db");
+  // A database from before favorites: notes and images only.
+  const old = new DatabaseSync(dbPath);
+  old.exec(`CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, tags TEXT NOT NULL DEFAULT '[]', body TEXT NOT NULL DEFAULT '')`);
+  old.close();
+
+  const first = buildApp({ dbPath });
+  assert.equal((await first.inject({ method: "PUT", url: "/api/favorite-fonts/Lobster" })).statusCode, 204);
+  await first.close();
+  const second = buildApp({ dbPath });
+  assert.deepEqual((await second.inject({ method: "GET", url: "/api/favorite-fonts" })).json(), ["Lobster"]);
+  await second.close();
+});

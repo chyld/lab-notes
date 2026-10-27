@@ -42,6 +42,10 @@ export function openDb(path: string) {
       tags       TEXT NOT NULL DEFAULT '[]',
       body       TEXT NOT NULL DEFAULT ''
     );
+    CREATE TABLE IF NOT EXISTS favorite_fonts (
+      family   TEXT PRIMARY KEY,
+      added_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS images (
       id         TEXT PRIMARY KEY,
       type       TEXT NOT NULL,
@@ -94,6 +98,12 @@ export function openDb(path: string) {
   // Ids are content hashes, so an existing row already holds these exact bytes.
   const insertImage = db.prepare("INSERT OR IGNORE INTO images (id, type, data, created_at) VALUES (?, ?, ?, ?)");
   const getImage = db.prepare("SELECT * FROM images WHERE id = ?");
+  // rowid breaks ties between favorites added in the same millisecond.
+  const listFavorites = db.prepare("SELECT family FROM favorite_fonts ORDER BY added_at, rowid");
+  const isFavorite = db.prepare("SELECT 1 FROM favorite_fonts WHERE family = ?");
+  const countFavorites = db.prepare("SELECT COUNT(*) AS count FROM favorite_fonts");
+  const insertFavorite = db.prepare("INSERT OR IGNORE INTO favorite_fonts (family, added_at) VALUES (?, ?)");
+  const deleteFavorite = db.prepare("DELETE FROM favorite_fonts WHERE family = ?");
 
   return {
     listNotes: () => list.all() as NoteListRow[],
@@ -110,6 +120,17 @@ export function openDb(path: string) {
       insertImage.run(row.id, row.type, row.data, row.created_at);
     },
     getImage: (id: string) => getImage.get(id) as ImageRow | undefined,
+    /** Favorite font families, in the order added. */
+    listFavoriteFonts: () => (listFavorites.all() as { family: string }[]).map((row) => row.family),
+    isFavoriteFont: (family: string) => isFavorite.get(family) !== undefined,
+    countFavoriteFonts: () => (countFavorites.get() as { count: number }).count,
+    /** Already a favorite: keeps its place in the order. */
+    addFavoriteFont: (family: string, addedAt: string) => {
+      insertFavorite.run(family, addedAt);
+    },
+    removeFavoriteFont: (family: string) => {
+      deleteFavorite.run(family);
+    },
     close: () => db.close(),
   };
 }

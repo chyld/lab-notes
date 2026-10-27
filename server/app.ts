@@ -50,8 +50,18 @@ const idParams = {
   properties: { id: { type: "string" } },
 } as const;
 
+// Every Google Fonts family is letters, digits, and single spaces (see SPEC "Favorite fonts").
+const familyParams = {
+  type: "object",
+  required: ["family"],
+  properties: { family: { type: "string", maxLength: 100, pattern: "^[A-Za-z0-9]+( [A-Za-z0-9]+)*$" } },
+} as const;
+
+export const MAX_FAVORITE_FONTS = 200;
+
 type DocBody = { content: { type: "doc"; content: object[] }; tags?: string[] };
 type IdParams = { id: string };
+type FamilyParams = { family: string };
 
 // JSON nesting levels (each Tiptap node level is two: the node and its content array).
 // Real documents stay far below this; the cap keeps recursive JSON handling off the stack limit.
@@ -88,6 +98,8 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
   const app = Fastify({
     logger,
     logController: new LogController({ disableRequestLogging: true }),
+    // Raw (still %-encoded) length: a 100-character family name with spaces is longer encoded.
+    routerOptions: { maxParamLength: 300 },
     ajv: { customOptions: { coerceTypes: false } },
     // Errors raised before routing (e.g. a malformed %-escape) also use the { error } shape.
     frameworkErrors: (err, _request, reply) => {
@@ -183,6 +195,33 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
       );
       if (!updated) return reply.code(404).send({ error: "Note not found" });
       return toNote(db.getNote(id)!);
+    },
+  );
+
+  app.get("/api/favorite-fonts", async () => db.listFavoriteFonts());
+
+  app.put<{ Params: FamilyParams }>(
+    "/api/favorite-fonts/:family",
+    { schema: { params: familyParams } },
+    async (request, reply) => {
+      const { family } = request.params;
+      // Synchronous check and insert, so no other request can slip in between.
+      if (!db.isFavoriteFont(family)) {
+        if (db.countFavoriteFonts() >= MAX_FAVORITE_FONTS) {
+          return reply.code(400).send({ error: "Too many favorite fonts" });
+        }
+        db.addFavoriteFont(family, new Date().toISOString());
+      }
+      return reply.code(204).send();
+    },
+  );
+
+  app.delete<{ Params: FamilyParams }>(
+    "/api/favorite-fonts/:family",
+    { schema: { params: familyParams } },
+    async (request, reply) => {
+      db.removeFavoriteFont(request.params.family);
+      return reply.code(204).send();
     },
   );
 

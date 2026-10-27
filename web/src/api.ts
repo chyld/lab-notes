@@ -46,6 +46,7 @@ async function send<T>(path: string, init: RequestInit): Promise<T> {
     }
     throw new ApiError(res.status, message);
   }
+  if (res.status === 204) return undefined as T; // no body to parse
   return (await res.json()) as T;
 }
 
@@ -59,6 +60,13 @@ export const createNote = (content: JSONContent, tags: string[]) =>
   request<Note>("POST", "/api/notes", { content, tags });
 export const updateNote = (id: string, content: JSONContent, tags: string[]) =>
   request<Note>("PUT", notePath(id), { content, tags });
+
+const favoritePath = (family: string) => `/api/favorite-fonts/${encodeURIComponent(family)}`;
+
+/** Favorite font families, in the order added. */
+export const listFavoriteFonts = () => request<string[]>("GET", "/api/favorite-fonts");
+export const addFavoriteFont = (family: string) => request<void>("PUT", favoritePath(family));
+export const removeFavoriteFont = (family: string) => request<void>("DELETE", favoritePath(family));
 
 /** Stores the image's bytes; resolves to its URL (`/api/images/<sha256>`). */
 export const uploadImage = (file: Blob) =>
