@@ -131,21 +131,25 @@ button:disabled {
   padding: 2rem 1.5rem;
 }
 
-.page-wrap {
-  padding: 2rem 1rem;
+/* The editor spans the full window width and fills the height below the header, so a click
+   anywhere under the text lands in it. */
+.editor-screen {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: #fff;
 }
 
+.page-wrap,
 .page {
-  max-width: 816px;
-  margin: 0 auto;
-  background: #fff;
-  border: 1px solid #dadce0;
-  box-shadow: 0 1px 3px rgb(60 64 67 / 15%);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
 }
 
 .page .ProseMirror {
-  min-height: 1056px;
-  padding: 96px;
+  flex: 1;
+  padding: 2rem 3rem;
   outline: none;
   font-size: 16px;
   line-height: 1.5;
@@ -380,8 +384,7 @@ button:disabled {
 
 @media (max-width: 816px) {
   .page .ProseMirror {
-    min-height: 70vh;
-    padding: 2rem 1.25rem;
+    padding: 1.5rem 1.25rem;
   }
 }
 

@@ -307,7 +307,9 @@ deps would destroy and recreate the editor):
 - **Leaving mid-save:** a `mountedRef` (set in an effect, cleared on cleanup) guards every
   post-await state update and the `onCreated` call, so a save that finishes after the user left
   completes its database write but changes nothing on screen.
-- The editor is styled as a centered white page on a gray background, Google Docs–like.
+- The editor spans the full window width (user request; it replaced the centered, Google
+  Docs–style page): white, text inset 3rem left/right (1.25rem under 816px wide), and at least as
+  tall as the window below the header, so clicking anywhere under the text focuses it.
 - Unmatched client routes render "Page not found." with a link back to the list.
 - Formatting comes from the [toolbar](#toolbar) and from StarterKit's keyboard shortcuts and
   Markdown-style input rules (`# ` heading, `- ` list, `Ctrl+B` bold), which keep working.

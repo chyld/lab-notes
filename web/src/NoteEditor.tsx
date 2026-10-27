@@ -70,7 +70,7 @@ export function NoteEditor({ initialNote, onCreated }: Props) {
   }
 
   return (
-    <>
+    <div className="editor-screen">
       <div className="editor-header">
         <TopBar>
           {error && (
@@ -87,6 +87,6 @@ export function NoteEditor({ initialNote, onCreated }: Props) {
       <main className="page-wrap">
         <EditorContent editor={editor} className="page" />
       </main>
-    </>
+    </div>
   );
 }
