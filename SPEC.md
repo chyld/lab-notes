@@ -19,6 +19,8 @@ In scope, and nothing else:
    [Highlight](#highlight).
 8. **Images** (added by user request): paste images into a note and resize them. See
    [Images](#images).
+9. **Line numbers** (added by user request): a gutter numbering every visual line, toggled from
+   the toolbar. See [Line numbers](#line-numbers).
 
 Out of scope (the user will decide later): delete, autosave, unsaved-changes warnings, keyboard
 save shortcut, search, folders, sharing, auth, real-time collaboration,
@@ -92,6 +94,7 @@ web/
     google-fonts.json       # generated catalog: [family, category][] by popularity
     highlights.ts           # the 8 highlight colors
     imagePaste.ts           # paste-to-upload plugin with an "Uploading image…" placeholder
+    LineNumbers.tsx         # line-number gutter: measures visual lines, renders the numbers
     TopBar.tsx              # "← Lab Notes" bar shared by the note screens
     styles.css
 scripts/
@@ -308,8 +311,9 @@ deps would destroy and recreate the editor):
   post-await state update and the `onCreated` call, so a save that finishes after the user left
   completes its database write but changes nothing on screen.
 - The editor spans the full window width (user request; it replaced the centered, Google
-  Docs–style page): white, text inset 3rem left/right (1.25rem under 816px wide), and at least as
-  tall as the window below the header, so clicking anywhere under the text focuses it.
+  Docs–style page): white, text inset 3rem left/right (1.25rem under 816px wide; the left inset
+  grows while [line numbers](#line-numbers) show), and at least as tall as the window below the
+  header, so clicking anywhere under the text focuses it.
 - Unmatched client routes render "Page not found." with a link back to the list.
 - Formatting comes from the [toolbar](#toolbar) and from StarterKit's keyboard shortcuts and
   Markdown-style input rules (`# ` heading, `- ` list, `Ctrl+B` bold), which keep working.
@@ -336,6 +340,7 @@ dividers. `ToolButton.tsx` holds the shared icon button (`Tool`) and divider:
 | Lists | Bulleted list, Numbered list |
 | Blocks | Quote, Code block, Horizontal line |
 | Clear | Clear formatting |
+| View | Line numbers (toggle) |
 
 Nothing else: no text color, alignment, indent buttons, image button, tables, or anything
 StarterKit and the extensions above don't include. StarterKit's shortcuts without a control (e.g. Shift+Enter
@@ -401,7 +406,7 @@ Behavior:
   Enter.
   Icons (lucide-react): `Undo2`, `Redo2`, `Bold`, `Italic`, `Underline`, `Strikethrough`, `Code`,
   `Link` (imported as `LinkIcon`), `List`, `ListOrdered`, `Quote`, `SquareCode`, `Minus`,
-  `RemoveFormatting`, `Highlighter`.
+  `RemoveFormatting`, `Highlighter`, `Hash` (line numbers).
 - **Look:** Google Docs–like. Icon buttons (lucide icons, 18px) in a light gray rounded bar.
   Hover is a slightly darker gray; pressed is light blue (`#d3e3fd`) with a blue icon
   (`#0b57d0`); disabled is faded. On narrow screens the row scrolls horizontally rather than
@@ -633,9 +638,52 @@ supplies:
   hover, while selected (`.ProseMirror-selectednode`), and while dragging; the selected image gets
   a 2px blue outline.
 
-**Privacy.** Pasted image files are stored on the server and never leave the homelab. Hotlinked
+**Privacy (images).** Pasted image files are stored on the server and never leave the homelab. Hotlinked
 images in pasted HTML are the exception: they load from their original site whenever the note is
 opened, which tells that site the viewer's IP address.
+
+### Line numbers
+
+A view setting, not note content: it never changes the document, the JSON, or Save.
+
+- **Toggle:** the last toolbar group (after Clear formatting, behind a divider) is one `Tool`
+  button, `Hash` icon, `aria-label="Line numbers"`, `aria-pressed` when on, with the same focus
+  rules as the other buttons. `NoteEditor` owns the on/off state (`useLineNumbersSetting` in
+  `LineNumbers.tsx`) and passes it, with the toggle, to `Toolbar` and to the gutter. Off by default; the choice is remembered in
+  this browser (`localStorage["lab-notes:line-numbers"]` = `"on"`/`"off"`; unavailable storage just
+  means it isn't remembered) and applies to every note.
+- **What's numbered:** every visual line of text, as laid out on screen, counted from 1 down the
+  note: each wrapped line of a long paragraph, each line after a hard break, each line of a code
+  block, an empty paragraph (one line). Headings, list items, and quotes count like paragraphs.
+  Images and horizontal lines are not text lines and get no number (numbering continues after
+  them). Nested content (lists, quotes) is numbered in document order.
+- **Measuring** (`LineNumbers.tsx`): for each textblock in the document (`doc.descendants`,
+  `node.isTextblock`, its DOM from `view.nodeDOM(pos)`), take `Range.selectNodeContents(dom)
+  .getClientRects()`, drop zero-height rects (never zero-width ones: blank lines, hard-break lines,
+  and empty code lines exist only as zero-width rects, e.g. ProseMirror's trailing `<br>`), sort by
+  top, and merge a rect into the current line when they overlap vertically by more than half the
+  shorter one (so a line mixing font sizes, or an inline element's box plus its text, is one line,
+  while a box bleeding a pixel into the next line doesn't chain two lines). A textblock with no
+  rects at all is one line spanning its content box.
+  Coordinates are relative to the `<main className="page-wrap">` (now `position: relative`) that
+  holds the editor and the gutter.
+- **When:** measured when the gutter mounts, then re-measured (coalesced to one measurement per
+  animation frame; a hidden tab measures when shown) on editor transactions except selection-only
+  ones (typing, formatting, and the upload placeholder's meta-only transactions count; caret moves
+  don't), when the editor element's content box resizes (`ResizeObserver`: window width, and the
+  wider left padding when the gutter turns on), when web fonts finish loading (`document.fonts`
+  `loadingdone`: Google Fonts change wrapping), and when an image in the editor loads or fails
+  (`load`/`error`, captured, since either moves the lines below). The numbers re-render only when
+  a line actually moved. While an image is being dragged to a new size the numbers
+  below it may lag until the drag ends (the commit is a transaction).
+- **Look:** a gutter in the editor's left margin; the left padding grows to 4.5rem (3rem under
+  816px wide) while numbers show. Each number is right-aligned 1rem left of the text column,
+  vertically centered on its line, 12px, `#5f6368`, `font-variant-numeric: tabular-nums`. The
+  gutter is `aria-hidden`, `pointer-events: none`, and not selectable, so it never ends up in
+  copied text and never steals clicks.
+
+Out of scope: numbering only some lines, restarting per page/section, a numbering interval
+(every 5th line), and printing.
 
 ## Branding
 
@@ -740,3 +788,6 @@ they never touch `./data`.
     page; undo/redo of a resize updates the image; Save then reload shows it at the new size; it
     survives `docker compose down && docker compose up -d`; `npm test` covers upload, dedupe, type
     detection, 413/415/404, and the GET headers.
+14. Line numbers: the toolbar toggle shows/hides a gutter numbering every visual line (wrapped
+    lines, code lines, empty paragraphs; not images); the numbers follow typing, window resizes,
+    font changes, and image loads; the setting survives a reload; it never marks the note dirty.
