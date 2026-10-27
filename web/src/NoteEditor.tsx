@@ -9,9 +9,11 @@ import { TopBar } from "./TopBar.tsx";
 type Props = {
   initialNote: Note | null;
   onCreated: (id: string) => void;
+  /** After every successful save, even if this editor has since unmounted (the save happened). */
+  onSaved: () => void;
 };
 
-export function NoteEditor({ initialNote, onCreated }: Props) {
+export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
   // Bumped on every document change; the note is dirty while it differs from savedVersion.
   const [version, setVersion] = useState(0);
   const [savedVersion, setSavedVersion] = useState(0);
@@ -64,6 +66,7 @@ export function NoteEditor({ initialNote, onCreated }: Props) {
         noteIdRef.current = note.id;
         if (mountedRef.current) onCreated(note.id);
       }
+      onSaved();
       if (mountedRef.current) setSavedVersion(startVersion);
     } catch (err) {
       if (mountedRef.current) setError(errorMessage(err));
