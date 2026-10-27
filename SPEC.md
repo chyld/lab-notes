@@ -31,6 +31,8 @@ In scope, and nothing else:
     of every note, `#tag` filters by tag (prefix). See [Search](#search).
 13. **Unsaved-changes warning** (added by user request): leaving a note with unsaved changes asks
     first. See [Unsaved changes](#unsaved-changes).
+14. **Favorite fonts** (added by user request): star fonts in the font picker; they're kept on the
+    server and pinned at the top of the list. See [Favorite fonts](#favorite-fonts).
 
 Out of scope (the user will decide later): delete, autosave, keyboard
 save shortcut, folders, sharing, auth, real-time collaboration,
@@ -103,6 +105,7 @@ web/
     HighlightPicker.tsx     # highlighter button + 8-color palette (toolbar control)
     popover.ts              # shared popover positioning and dismissal (font picker, highlight)
     fonts.ts                # catalog loading, Google Fonts <link> loading, font-family values
+    favoriteFonts.ts        # favorite fonts: cached list + one ordered request queue
     google-fonts.json       # generated catalog: [family, category][] by popularity
     highlights.ts           # the 8 highlight colors
     imagePaste.ts           # paste-to-upload plugin with an "Uploading image…" placeholder
@@ -163,6 +166,13 @@ column, so the next start retries). A row whose `content` won't parse gets `''` 
 aborting the upgrade. `updated_at` is not touched.
 
 ```sql
+CREATE TABLE IF NOT EXISTS favorite_fonts (
+  family   TEXT PRIMARY KEY,     -- a Google Fonts family name, e.g. "Open Sans"
+  added_at TEXT NOT NULL         -- ISO 8601 UTC; favorites list in the order added
+);
+```
+
+```sql
 CREATE TABLE IF NOT EXISTS images (
   id         TEXT PRIMARY KEY,   -- SHA-256 of the bytes, lowercase hex
   type       TEXT NOT NULL,      -- MIME type detected from the bytes
@@ -175,7 +185,8 @@ Images are stored in the same database file, so `notes.db` stays the whole of th
 
 `openDb(path)` creates the parent directory (`mkdirSync(dirname(path), { recursive: true })`)
 unless `path` is `":memory:"`, opens `DatabaseSync`, runs `PRAGMA journal_mode = WAL;`, creates
-both tables, and runs the migrations: `tags` first, then `body`. The DB file is `$DATA_DIR/notes.db` (`DATA_DIR` defaults to `./data`). WAL mode puts
+the tables, and runs the migrations: `tags` first, then `body`. (`favorite_fonts` is new, so
+`CREATE TABLE IF NOT EXISTS` is all an existing database needs.) The DB file is `$DATA_DIR/notes.db` (`DATA_DIR` defaults to `./data`). WAL mode puts
 `notes.db-wal` and `notes.db-shm` beside it.
 
 ## Title rule
@@ -207,6 +218,9 @@ All under `/api`, JSON in and out, except image bytes (below). Note POST/PUT req
 | `POST` | `/api/notes` | `{ content: Doc, tags?: string[] }` | `201` `Note` |
 | `GET` | `/api/notes/:id` | — | `200` `Note`, or `404` |
 | `PUT` | `/api/notes/:id` | `{ content: Doc, tags?: string[] }` | `200` `Note`, or `404` |
+| `GET` | `/api/favorite-fonts` | — | `200` `["Lobster", …]`, in the order added |
+| `PUT` | `/api/favorite-fonts/:family` | — | `204` (adds it; already a favorite → also `204`) |
+| `DELETE` | `/api/favorite-fonts/:family` | — | `204` (removes it; not a favorite → also `204`) |
 | `POST` | `/api/images` | raw image bytes | `201` `{ url }` |
 | `GET` | `/api/images/:id` | — | `200` the image bytes, or `404` |
 
@@ -230,6 +244,14 @@ that is empty after cleaning (`#`, `#!!`) is ignored. A note must match every to
 keep the list order (most recently saved first). Word searches read every note's `body`; tag-only searches use the plain list. Matching runs in JavaScript over the rows (`server/search.ts`:
 `parseQuery`, `matchesQuery`), which is plenty fast for a homelab's notes and handles non-ASCII
 case properly (SQLite's `LIKE` only folds ASCII).
+
+**Favorite fonts:** `:family` (URL-encoded; `Open%20Sans`) must be at most 100 characters of
+letters and digits in words separated by single spaces (`^[A-Za-z0-9]+( [A-Za-z0-9]+)*$`; every
+Google Fonts family is), else `400`. The router's `maxParamLength` is raised to 300 (it counts the
+still-encoded length, and `%20` is three characters). At most 200 favorites: a `PUT` of a new one
+past that → `400 { error: "Too many favorite fonts" }`. Both writes are idempotent; re-adding keeps
+a favorite's place. Listed `ORDER BY added_at, rowid` (rowid breaks a same-millisecond tie). Not
+part of any note; no Save involved.
 
 **Tags:** `tags` is optional. On `POST`, absent means `[]`; on `PUT`, absent leaves the note's tags
 unchanged (the app always sends them). Schema: an array of at most 50 unique strings
@@ -300,8 +322,10 @@ So `POST /anything` is a JSON 404, never `index.html`, and a missing file such a
 
 ### `api.ts`
 
-Typed helpers: `listNotes(q?)` (`?q=` URL-encoded, omitted when blank), `getNote(id)`, `createNote(content, tags)`, `updateNote(id, content, tags)`,
-`uploadImage(file)`. Note POST/PUT send `Content-Type: application/json`; `uploadImage` sends the
+Typed helpers: `listNotes(q?)` (`?q=` URL-encoded, omitted when blank), `listFavoriteFonts()`,
+`addFavoriteFont(family)`, `removeFavoriteFont(family)`, `getNote(id)`, `createNote(content, tags)`, `updateNote(id, content, tags)`,
+`uploadImage(file)`. The favorite-font writes send no body (so no `Content-Type`) and resolve to
+`void` on `204` (`send` doesn't parse an empty `204`). Note POST/PUT send `Content-Type: application/json`; `uploadImage` sends the
 file's bytes with `Content-Type: file.type` and returns the `url`. A non-2xx response throws an `ApiError` carrying
 `status` and the server's `error` message.
 
@@ -546,14 +570,16 @@ unreachable. The UI shows the first family in the stack without quotes.
   the button (the toolbar scrolls horizontally, which would clip an absolutely positioned child).
   It contains: a search box (focused on open), category chips (All, Sans Serif, Serif, Display,
   Handwriting, Monospace), a `Default` row (`unsetFontFamily()`), then every matching family as a
-  row (`role="listbox"` / `role="option"`, `aria-selected` on the current font).
+  row (`role="listbox"` / `role="option"`, `aria-selected` on the current font; with
+  [favorites](#favorite-fonts) pinned, on its first row only).
 - Each row renders its name in its own font. Previews load lazily: an `IntersectionObserver` calls
   `loadPreview` when a row scrolls into view.
 - Search is a case-insensitive substring match on the family name, combined with the category.
   `Loading fonts…` shows until the catalog import resolves.
 - The search box is a `role="combobox"` with `aria-controls` the listbox and
   `aria-activedescendant` the highlighted option (each option has a stable id). On open the
-  highlight is the current font; a search highlights its first match.
+  highlight is the current font; a search highlights its first match. (With favorites, see
+  [Favorite fonts](#favorite-fonts).)
 - Keyboard (in the search box): ↑/↓ move the highlight (scrolled into view; hovering moves it
   too but doesn't scroll), Enter applies it (ignored while an IME is composing, while the catalog
   is still loading, and when the search matches nothing). Esc anywhere in the popover closes it and
@@ -562,7 +588,9 @@ unreachable. The UI shows the first family in the stack without quotes.
   the popover, focus leaving it (e.g. Tab past the list), resizing the window, or an element outside
   it scrolling (the toolbar scrolls sideways; page scrolls are ignored since the header is sticky)
   closes it. If the catalog chunk fails to load, the popover says so and the next open retries.
-- Rows are memoized, so moving the highlight re-renders two rows, not ~1,700.
+- Rows are memoized, so moving the highlight (or starring a font) re-renders a couple of rows, not
+  ~1,700: every row prop is stable (its key-based id, booleans, shared callbacks), none an index.
+- Favorites: see [Favorite fonts](#favorite-fonts).
 - Applying runs `loadFont(family)` and sets the font via `setTextStyle` (`editor.ts`), then closes.
   `setTextStyle` exists because, at a collapsed cursor, Tiptap's `setMark` merges in the
   surrounding text's attributes even after Clear formatting emptied the stored marks (a cleared
@@ -570,6 +598,60 @@ unreachable. The UI shows the first family in the stack without quotes.
   explicitly (from `textStyleAt`, the rest `null`); for a range it uses Tiptap's per-segment merge,
   so changing the size of text in two fonts keeps both fonts. Font size applies the same way. The editor keeps its selection while the popover has focus, so the font lands on the
   text that was selected.
+
+**Favorite fonts** (user request: "a way to save my favorite fonts so that they're easy to
+access"). Kept on the server (`favorite_fonts`, API above), so every device and browser shows the
+same favorites; a preference, not note content, so a star click saves at once (no Save button).
+State and the request queue live in `favoriteFonts.ts`; `FontPicker.tsx` renders them.
+
+- **Loading:** each time the picker opens it fetches `listFavoriteFonts()` (through the queue
+  below, so it sees any write still in flight). Meanwhile it shows the last list it had (a
+  module-level cache, empty on the first open), so an unchanged list doesn't jump. Stars and the
+  shortcut stay off until that fetch answers: before then the picker doesn't know what's starred.
+  If it fails they stay off and the cached group (if any) still shows.
+- **Order of rows:** `Default` first, as before. Then, when any favorite matches the current
+  search and category, a "Favorites" group (catalog families only, in the order added), then an
+  "All fonts" group with every match as before (favorites appear there too, in their usual place).
+  With no matching favorite there are no groups or headings: the list is exactly as before.
+- **Markup** (the APG grouped-listbox pattern): the listbox is a `div`; each group is a
+  `ul role="group"` labelled (`aria-labelledby`) by its first child, a small uppercase heading
+  `li role="presentation"`; without groups, one `ul role="presentation"`. Loading/empty/error
+  messages render below the listbox, not inside it. Row identity is the group plus the family
+  (`default`, `fav:Lobster`, `all:Lobster`), used for React keys and option ids (spaces become
+  `-`, which is unambiguous since families never contain `-`). Both copies of the current font
+  show the current-font color; only the first has `aria-selected`.
+- **Stars:** each font row ends with a lucide `Star` (16px): filled `--favorite` (`#d97706`, 3:1
+  on white) for a favorite, otherwise an outline shown only on the highlighted or hovered row, and
+  always (faint) on touch screens (`@media (hover: none)`). The star is a decorative, mouse/touch
+  target (`aria-hidden`, a `span`, no tab stop), since an option's contents aren't exposed to
+  screen readers. Clicking it toggles the favorite and doesn't apply the font; like the row, it
+  cancels `mousedown` so focus stays in the search box. Its `title`: "Add to favorites (Ctrl+D)" /
+  "Remove from favorites (Ctrl+D)" (⌘D on macOS). A favorite's option name ends in ", favorite"
+  (visually hidden text), and the search box has `aria-keyshortcuts`.
+- **Keyboard:** Ctrl+D (⌘D on macOS: exactly that modifier, no Shift or Alt; ignored on key repeat
+  and while an IME is composing) in the search box toggles the highlighted font, with
+  `preventDefault` so the browser doesn't bookmark the page. Nothing on `Default`.
+- **Announcements:** a visually hidden `role="status"` says "Added Lobster to favorites" /
+  "Removed Lobster from favorites".
+- **Highlight:** tracked by row identity, not index (↑/↓ walk the flat list of options in display
+  order, skipping headings). It's set when the popover is ready (catalog loaded and the favorites
+  fetch settled) and on every search or category change:
+  - no search, Favorites group showing: the current font's Favorites row if it's a favorite, else
+    `Default`; the list opens at the top, favorites in view;
+  - no search, no group: the current font's row, else `Default` (as before);
+  - a search: its first match (a favorite, if one matches).
+
+  Toggling never moves it: starring keeps it on the same row (the new Favorites row isn't
+  highlighted); unstarring the highlighted Favorites row moves it to that font's All fonts row
+  (scrolled into view only for Ctrl+D, where the keyboard user needs to see it).
+- **Toggling** updates the list at once (optimistic, and the cache) and queues
+  `addFavoriteFont` / `removeFavoriteFont`. All favorites requests run one at a time, in order
+  (one module-level queue that outlives the popover), so a quick star-unstar can't reach the
+  server reversed. If a write fails, that font is reverted unless it's been toggled again since
+  (newer toggle wins), and the popover shows "Couldn't update favorites: <server message>"
+  (`role="alert"`) below the list until the next toggle. Writes finish even if the popover closes.
+- **Other devices:** the server keeps the last write it receives; another device's changes show
+  the next time the picker opens.
 
 **Font size** (`FontSizeControl.tsx`), after the font picker, Google Docs–style: a `−` button, a
 small number input, a `+` button. Units are points (`pt`).
@@ -1133,3 +1215,8 @@ they never touch `./data`.
     without saving; Save saves and then leaves (a new note is created); a failed save stays with
     the error; saving with the toolbar (including a new note's first save) never asks; reloading
     or closing the tab while dirty gets the browser's prompt; a clean note never asks.
+19. Favorite fonts: the star on a font row (or Ctrl+D on the highlighted row) adds it to Favorites,
+    which appear pinned at the top of the picker under `Default` (filtered by search and category),
+    in the order added; the picker opens with them in view; starring again removes it; favorites persist across reloads and devices (server);
+    applying a font from the Favorites group works like any row; the API validates family names
+    and caps favorites at 200; `npm test` covers the API.
