@@ -13,6 +13,8 @@ In scope, and nothing else:
 4. **Packaging**: one Docker image, run with Docker Compose, data on a persistent volume.
 5. **Formatting toolbar** (added by user request): a Google Docs–style toolbar over the editor
    for the formatting StarterKit already supports. See [Toolbar](#toolbar).
+6. **Fonts and font size** (added by user request): pick any Google Font by browsing/searching,
+   linked from fonts.googleapis.com, and set font size. See [Fonts and size](#fonts-and-size).
 
 Out of scope (the user will decide later): delete, autosave, unsaved-changes warnings, keyboard
 save shortcut, search, folders, sharing, auth, real-time collaboration,
@@ -31,6 +33,7 @@ version history, dates or previews in the list, images/uploads.
 | Types | `typescript@^7`, `@types/node@^26`, `@types/react@^19`, `@types/react-dom@^19` | `npm run typecheck`. |
 | Styling | One plain CSS file | No UI framework. |
 | Icons | `lucide-react@^1` (devDependency; tree-shaken into the bundle) | Toolbar icons. |
+| Fonts | `@tiptap/extension-text-style@^3` (`TextStyle`, `FontFamily`, `FontSize`); Google Fonts CSS API | Font family and size. |
 | Tests | `node:test` (built in) | Server title logic and API. |
 
 The lockfile is the source of truth for exact versions.
@@ -71,6 +74,12 @@ web/
     NotePage.tsx            # route "/notes/:id" (id may be "new"): loading
     NoteEditor.tsx          # the Tiptap editor and Save
     Toolbar.tsx             # formatting toolbar for the editor
+    FontPicker.tsx          # Google Fonts browser (toolbar control)
+    FontSizeControl.tsx     # − [size] + (toolbar control)
+    fonts.ts                # catalog loading, Google Fonts <link> loading, font-family values
+    google-fonts.json       # generated catalog: [family, category][] by popularity
+scripts/
+  update-google-fonts.ts    # regenerates web/src/google-fonts.json (npm run fonts:update)
     TopBar.tsx              # "← Lab Notes" bar shared by the note screens
     styles.css
 ```
@@ -266,6 +275,8 @@ Google Docs order, as groups separated by thin dividers:
 |---|---|
 | History | Undo, Redo |
 | Block style | A `<select>`: Normal text, Heading 1, Heading 2, Heading 3, Heading 4, Heading 5, Heading 6 |
+| Font | Font picker (see [Fonts and size](#fonts-and-size)) |
+| Size | Font size: `−` `[12]` `+` |
 | Marks | Bold, Italic, Underline, Strikethrough, Inline code |
 | Link | Link |
 | Lists | Bulleted list, Numbered list |
@@ -345,6 +356,76 @@ Behavior:
   Underline `Ctrl+U`, Strikethrough `Ctrl+Shift+S`, Inline code `Ctrl+E`, Bulleted list
   `Ctrl+Shift+8`, Numbered list `Ctrl+Shift+7`, Quote `Ctrl+Shift+B`, Code block `Ctrl+Alt+C`.
   (These are StarterKit's own bindings; the toolbar adds none.)
+
+### Fonts and size
+
+**Extensions.** `editor.ts` adds `TextStyle`, `FontFamily`, and `FontSize` from
+`@tiptap/extension-text-style` to StarterKit. Font and size are attributes of the `textStyle`
+mark, so they are saved in the note's JSON, apply to the selection (or, at a collapsed cursor, to
+text typed next), and are removed by Clear formatting.
+
+**Catalog.** `web/src/google-fonts.json` is a committed list of every Google Fonts family as
+`[family, category]`, sorted by popularity (~1,950 entries; categories: Sans Serif, Serif,
+Display, Handwriting, Monospace). `npm run fonts:update` regenerates it from
+`https://fonts.google.com/metadata/fonts` (no API key; it can't be fetched at runtime because it
+sends no CORS header). The app imports it lazily (`import()`) the first time the picker opens, so
+it isn't in the main bundle.
+
+**Loading fonts** (`fonts.ts`): fonts are linked from Google, as the user chose.
+
+- `loadFont(family)` appends one `<link rel="stylesheet">` per family to `<head>`:
+  `https://fonts.googleapis.com/css2?family=<Name+With+Plus>:ital,wght@0,400;0,700;1,400;1,700&display=swap`
+  (regular, bold, italic, bold italic; Google tolerates missing variants).
+- `loadPreview(family)` links `…/css2?family=<Name>&text=<the family name>` so a picker row can
+  render its name in its own font while downloading only those glyphs.
+- Both dedupe by family and only accept names matching `^[A-Za-z0-9 ]+$` (all catalog names do);
+  anything else is ignored, so odd stored data can't build a strange URL.
+- Fonts used by a note load when it opens and whenever its content changes: the editor scans the
+  document's `textStyle` marks for `fontFamily` and calls `loadFont` for each.
+
+**Stored value.** Choosing a font stores a CSS font stack, `"Family Name", <generic>`, where the
+generic comes from the category (Serif → `serif`, Handwriting → `cursive`, Monospace →
+`monospace`, Sans Serif and Display → `sans-serif`), so text degrades sensibly if Google is
+unreachable. The UI shows the first family in the stack without quotes.
+
+**Font picker** (`FontPicker.tsx`), in the toolbar after the text-style select:
+
+- A button showing the font at the selection (`getAttributes("textStyle").fontFamily`, first
+  family) or `Default`, ~140px wide with an ellipsis, `aria-haspopup="listbox"`,
+  `aria-expanded`.
+- Clicking opens a popover rendered in a portal on `document.body` with `position: fixed` under
+  the button (the toolbar scrolls horizontally, which would clip an absolutely positioned child).
+  It contains: a search box (focused on open), category chips (All, Sans Serif, Serif, Display,
+  Handwriting, Monospace), a `Default` row (`unsetFontFamily()`), then every matching family as a
+  row (`role="listbox"` / `role="option"`, `aria-selected` on the current font).
+- Each row renders its name in its own font. Previews load lazily: an `IntersectionObserver` calls
+  `loadPreview` when a row scrolls into view.
+- Search is a case-insensitive substring match on the family name, combined with the category.
+  `Loading fonts…` shows until the catalog import resolves.
+- Keyboard: ↑/↓ move the highlight (scrolled into view), Enter applies it, Esc closes. Clicking a
+  row applies it. Clicking outside the popover, or resizing the window, closes it.
+- Applying runs `loadFont(family)` and `editor.chain().focus().setFontFamily(stack).run()`, then
+  closes. The editor keeps its selection while the popover has focus, so the font lands on the
+  text that was selected.
+
+**Font size** (`FontSizeControl.tsx`), after the font picker, Google Docs–style: a `−` button, a
+small number input, a `+` button. Units are points (`pt`).
+
+- The input shows the size at the selection start: the `textStyle` `fontSize` if set, otherwise
+  the computed CSS font size of the text at the cursor converted to points (px × 0.75, rounded),
+  so headings show their real size (e.g. Heading 1 → 24).
+- Typing a number and pressing Enter (or leaving the input) applies `setFontSize("<n>pt")`;
+  `−`/`+` apply the current size −1 / +1. Sizes are whole numbers clamped to 1–400. Non-numeric
+  input reverts. Enter returns focus to the editor; `−`/`+` follow the toolbar button focus rules.
+- Labels: `aria-label="Decrease font size"`, `"Font size"`, `"Increase font size"`.
+
+**Privacy.** Because fonts are linked from Google (the user's choice over self-hosting), a browser
+showing the picker or a note that uses a Google Font requests CSS from fonts.googleapis.com and
+font files from fonts.gstatic.com. The app works without internet; text falls back to the generic
+family.
+
+Out of scope: weights other than regular/bold, uploading fonts, a per-note default font, line
+height, colors.
 
 ## Branding
 
@@ -437,3 +518,6 @@ they never touch `./data`.
 10. Toolbar: each control applies its formatting to the selection, shows pressed state where the
     cursor is, keeps focus in the editor, and enables Save; Undo/Redo are disabled when there is
     nothing to undo/redo; the block-style select reflects and changes the current block.
+11. Fonts: the picker searches/filters all Google Fonts with live previews; choosing one applies
+    it to the selection and loads it; reopening the note (or reloading) shows the text in that
+    font. Font size shows the size at the cursor, and −, +, and typed sizes change it.

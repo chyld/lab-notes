@@ -19,6 +19,7 @@
     "fastify": "^5.12.7"
   },
   "devDependencies": {
+    "@tiptap/extension-text-style": "^3.32.0",
     "@tiptap/pm": "^3.32.0",
     "@tiptap/react": "^3.32.0",
     "@tiptap/starter-kit": "^3.32.0",
