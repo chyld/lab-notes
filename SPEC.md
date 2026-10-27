@@ -21,6 +21,8 @@ In scope, and nothing else:
    [Images](#images).
 9. **Line numbers** (added by user request): a gutter numbering every visual line, toggled from
    the toolbar. See [Line numbers](#line-numbers).
+10. **Notes sidebar** (added by user request): a collapsible left bar on the note screen listing
+    every note; clicking one opens it for editing. See [Notes sidebar](#notes-sidebar).
 
 Out of scope (the user will decide later): delete, autosave, unsaved-changes warnings, keyboard
 save shortcut, search, folders, sharing, auth, real-time collaboration,
@@ -95,6 +97,7 @@ web/
     highlights.ts           # the 8 highlight colors
     imagePaste.ts           # paste-to-upload plugin with an "Uploading image…" placeholder
     LineNumbers.tsx         # line-number gutter: measures visual lines, renders the numbers
+    Sidebar.tsx             # collapsible notes sidebar + its open/closed state (context)
     TopBar.tsx              # "← Lab Notes" bar shared by the note screens
     styles.css
 scripts/
@@ -691,6 +694,59 @@ A view setting, not note content: it never changes the document, the JSON, or Sa
 Out of scope: numbering only some lines, restarting per page/section, a numbering interval
 (every 5th line), and printing.
 
+### Notes sidebar
+
+On the note screen (`/notes/:id`, including `new`, loading, not-found, and error states), a left
+bar lists every note; clicking one opens it in the editor. The list page (`/`) is unchanged.
+
+- **Layout:** `NotePage` always renders one `<div className="note-layout">` = the sidebar + a
+  `.note-main` column; only `.note-main`'s children switch (the keyed `NoteEditor`, or the top bar
+  and a status), so the sidebar is a single instance that never remounts. The sidebar
+  (`<nav id="notes-sidebar">`) stays mounted while hidden (`hidden` attribute), keeping its list,
+  scroll position, and the `aria-controls` target. It is 260px wide, light gray (`#f8f9fa`) with a
+  right border, `position: sticky; top: 0; align-self: flex-start; height: 100dvh` with its own
+  vertical scroll, so it stays put while the note scrolls. `.note-main` is `flex: 1; min-width: 0`
+  (the toolbar keeps scrolling sideways; its scrollbar is `thin`, since beside the sidebar it
+  overflows on ~1280px windows). No ancestor sets `overflow`, so the editor header stays sticky.
+  Line numbers re-measure on their own when the sidebar changes the editor's width
+  (`ResizeObserver`).
+- **Contents** (`<nav aria-label="Notes">`): a header row with the label "Notes" and a hide
+  button, then the notes as links (`<Link to="/notes/:id">`), titles truncated with an ellipsis
+  (full title in `title`), most recently saved first, the same data and order as the list page
+  (`listNotes()`). The open note's link has `aria-current="page"` and a light blue background.
+  States: "Loading…" (first load only), "No notes yet", or the error message (first load only;
+  a failed refresh keeps the list already shown).
+- **Freshness:** `NoteEditor` gets an `onSaved()` callback, called after every successful save
+  (PUT or the first POST, after `onCreated`'s navigation so the new note is highlighted). Unlike
+  `onCreated` it is not guarded by `mountedRef`: a save that finishes after the user switched notes
+  still refreshes the list. `NotePage` bumps a counter and the sidebar refetches, so a new note
+  appears and renamed/re-saved notes move to the top. While refetching, the previous list stays
+  shown; the effect's cleanup cancels a superseded request, so an older response never overwrites
+  a newer list. The sidebar lives in `NotePage`, outside the keyed `NoteEditor`, so switching notes
+  doesn't reload it.
+- **Switching notes:** clicking a note is plain navigation, like the list page's links: unsaved
+  edits in the open note are discarded (unsaved-changes warnings remain out of scope). Clicking the
+  note that's already open changes nothing.
+- **Collapse:** the sidebar header's button (`PanelLeftClose` icon, `aria-label="Hide notes"`)
+  hides it; while hidden, the top bar shows a button at its far left (`PanelLeftOpen`,
+  `aria-label="Show notes"`) that shows it. Both are `.tool`-style icon buttons with
+  `aria-expanded` and `aria-controls="notes-sidebar"`; since each replaces the other, focus moves
+  to the one now shown. The state is shared through a small React context in `Sidebar.tsx`,
+  provided by `NotePage`, read by `TopBar` (with no provider, the Show button renders nothing).
+- **Remembered:** on wide screens the open/closed choice is stored in
+  `localStorage["lab-notes:sidebar"]` (`"open"`/`"closed"`, default open; unavailable storage
+  just means not remembered).
+- **Narrow screens** (`matchMedia("(max-width: 816px)")`, the same breakpoint as the CSS, with a
+  `change` listener): the sidebar would crowd out the editor, so it has its own session-only state
+  that starts closed (never stored; only the wide-screen choice is written to `localStorage`).
+  Crossing the breakpoint switches to that width's state. It opens as an overlay (`position:
+  fixed`, `z-index: 30` over a translucent backdrop at 29, so above the sticky header and the
+  popovers at 10, with a shadow), makes `.note-main` `inert` while open (no tabbing into the
+  editor underneath), and closes on a backdrop click, Esc (focus returns to Show notes), or
+  picking a note.
+
+Out of scope: a New note button in the sidebar, search, reordering, delete.
+
 ## Branding
 
 The app is **Lab Notes**: browser tab title, the list heading, and the "← Lab Notes" back link.
@@ -797,3 +853,7 @@ they never touch `./data`.
 14. Line numbers: the toolbar toggle shows/hides a gutter numbering every visual line (wrapped
     lines, code lines, empty paragraphs; not images); the numbers follow typing, window resizes,
     font changes, and image loads; the setting survives a reload; it never marks the note dirty.
+15. Sidebar: the note screen shows a left bar listing every note (most recent first, the open
+    note highlighted); clicking a note opens it; saving updates the list; Hide/Show collapses and
+    restores it, remembered on wide screens; on narrow screens it's an overlay that closes after
+    picking a note.
