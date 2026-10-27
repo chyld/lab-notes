@@ -42,6 +42,26 @@ button:disabled {
   color: #b3261e;
 }
 
+/* Brand */
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 600;
+}
+
+.brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: inherit;
+  font-weight: 600;
+  text-decoration: none;
+}
+
 /* Notes list */
 
 .list-page {

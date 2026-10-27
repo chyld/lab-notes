@@ -28,7 +28,10 @@ export function NotesList() {
   return (
     <main className="list-page">
       <header className="list-header">
-        <h1>Lab Notes</h1>
+        <h1 className="brand">
+          <img src="/logo.svg" alt="" width={36} height={36} />
+          Lab Notes
+        </h1>
         <Link to="/notes/new" className="button">
           New note
         </Link>
