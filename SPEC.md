@@ -25,7 +25,7 @@ version history, dates or previews in the list, images/uploads.
 | Database | SQLite via `node:sqlite` (`DatabaseSync`), WAL mode | One file, zero ops. |
 | Frontend | `react@^19`, `react-dom@^19`, `vite@^8`, `@vitejs/plugin-react@^6` | Tiptap's first-class binding is React. |
 | Editor | `@tiptap/react@^3`, `@tiptap/pm@^3`, `@tiptap/starter-kit@^3` | StarterKit defaults, unmodified. |
-| Routing | `react-router@^8`, declarative mode (`BrowserRouter`, `Routes`, `Route`) | Two routes. |
+| Routing | `react-router@^8`, declarative mode (`BrowserRouter`, `Routes`, `Route`) | Two routes, plus a catch-all "Page not found". |
 | Types | `typescript@^7`, `@types/node@^26`, `@types/react@^19`, `@types/react-dom@^19` | `npm run typecheck`. |
 | Styling | One plain CSS file | No UI framework. |
 | Tests | `node:test` (built in) | Server title logic and API. |
@@ -56,7 +56,10 @@ server/
   title.test.ts
   app.test.ts
 web/
-  index.html
+  index.html                # links the favicon and apple-touch-icon
+  public/
+    logo.svg                # Lab Notes logo; also the favicon
+    apple-touch-icon.png    # 180px, for phone home screens
   src/
     main.tsx                # router setup
     api.ts                  # typed fetch helpers
@@ -123,7 +126,8 @@ The title is computed **on the server** from the saved Tiptap JSON:
 4. If the result is empty (empty first line, or no textblock at all), the title is `Untitled`.
 
 `extractTitle` is total: it never throws. Non-object nodes, non-array `content`, and non-string
-`text` are ignored.
+`text` are ignored, and the walk uses an explicit stack (no recursion), so no input depth or width
+can overflow the call stack.
 
 ## API
 
@@ -131,7 +135,7 @@ All under `/api`, JSON in and out. POST/PUT require `Content-Type: application/j
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| `GET` | `/api/notes` | — | `200` `[{ id, title }]`, most recently saved first (`updated_at DESC, id ASC`) |
+| `GET` | `/api/notes` | — | `200` `[{ id, title }]`, most recently saved first (`updated_at DESC, rowid DESC`: saves in the same millisecond list latest-inserted first) |
 | `POST` | `/api/notes` | `{ content: Doc }` | `201` `Note` |
 | `GET` | `/api/notes/:id` | — | `200` `Note`, or `404` |
 | `PUT` | `/api/notes/:id` | `{ content: Doc }` | `200` `Note`, or `404` |
@@ -143,21 +147,29 @@ the current time.
 
 **Validation.** Fastify is constructed with `ajv: { customOptions: { coerceTypes: false } }` so
 wrong types are rejected, not coerced. The body schema: `content` is required and is an object with
-`type: { const: "doc" }` and an optional `content` array whose items are objects. Extra properties
-are allowed everywhere (never `additionalProperties: false`, which would strip Tiptap data). Nodes
-are not deeply validated in the MVP.
+`type: { const: "doc" }` and a required `content` array with at least one item (ProseMirror's doc is
+`block+`, so an empty doc could never be opened), whose items are objects. Extra properties are
+allowed everywhere (never `additionalProperties: false`, which would strip Tiptap data). Nodes are
+not deeply validated in the MVP.
+
+**Depth limit.** Before any write, `POST`/`PUT` reject a document nested more than 200 JSON levels
+deep (checked iteratively) with `400 { error: "Document is nested too deeply" }`. Each Tiptap node
+level is two JSON levels, so this allows ~100 levels of nesting, far beyond real documents, and
+keeps recursive JSON handling (serializing the reply) from overflowing the stack after a write.
 
 **Errors.** Every error response is `{ "error": string }` with the original status:
 
 - A `setErrorHandler` maps errors with a 4xx `statusCode` (validation 400, 413 body over Fastify's
   default 1 MiB limit, 415 bad content type) to `{ error: err.message }`, and anything else to
   `500 { error: "Internal server error" }` (logged).
+- Fastify's `frameworkErrors` option maps errors raised before routing (e.g. a malformed
+  `%`-escape in the URL → 400) to `{ error: err.message }`.
 - The single `setNotFoundHandler` (below) returns `404 { error: "Not found" }` for API misses.
 - Unknown note ids return `404 { error: "Note not found" }`.
 
 ## Static serving
 
-`buildApp` registers `@fastify/static` only when `staticDir` is given and exists (`index.ts`
+`buildApp` registers `@fastify/static` only when `staticDir` contains `index.html` (`index.ts`
 passes `resolve(import.meta.dirname, "../dist/web")`). The one `setNotFoundHandler`:
 
 1. If the method is `GET` or `HEAD`, the path is not under `/api`, the last path segment has no
@@ -204,7 +216,8 @@ instance and saving).
     `enableContentCheck` runs). Invalid content shows "This note can't be opened: its content is
     invalid." with no editor and no Save, so an invalid note is never shown blank and saved over.
     (Done here rather than via `onContentError`, which fires during React render.)
-  - Each new-note session gets a fresh key (`new-1`, `new-2`, …).
+  - Each new-note session gets a fresh key (`new-1`, `new-2`, …; StrictMode's dev double-run may
+    skip a number, which is harmless).
 - `onCreated(id)`: set `createdIdRef.current = id`, then `navigate("/notes/" + id, { replace: true })`.
   `session.key` does not change, so `NoteEditor` is not remounted and keeps content and cursor.
 
@@ -222,13 +235,16 @@ deps would destroy and recreate the editor):
   `0`. Dirty = `version !== savedVersion`. A save captures `v = version` when it starts; on
   success it sets `savedVersion = v`, so edits typed during a save stay unsaved. A failed save
   changes nothing.
-- **Save button:** disabled when not dirty or while saving. Label "Saving…" while in flight. A
+- **Save button:** disabled when not dirty or while saving. A `savingRef`, set synchronously at
+  the start of a save, also guards `save()`, because the `saving` state only disables the button
+  after React re-renders; two clicks in one tick must not both `POST` (duplicate note). Label "Saving…" while in flight. A
   failure shows the `ApiError` message and re-enables Save; the content stays in the editor. Sends
   `editor.getJSON()`.
 - **Leaving mid-save:** a `mountedRef` (set in an effect, cleared on cleanup) guards every
   post-await state update and the `onCreated` call, so a save that finishes after the user left
   completes its database write but changes nothing on screen.
 - The editor is styled as a centered white page on a gray background, Google Docs–like.
+- Unmatched client routes render "Page not found." with a link back to the list.
 - Formatting comes from StarterKit's keyboard shortcuts and Markdown-style input rules (`# `
   heading, `- ` list, `Ctrl+B` bold). No toolbar.
 
@@ -236,12 +252,25 @@ StarterKit v3 defaults include `Link` (autolinks pasted/typed URLs), `Underline`
 and `TrailingNode` (keeps an empty paragraph at the end of the document, so saved JSON often ends
 with one). These are expected.
 
+## Branding
+
+The app is **Lab Notes**: browser tab title, the list heading, and the "← Lab Notes" back link.
+`web/public/logo.svg` is a blue (`#0b57d0`) document with a light-blue (`#8ab4f8`) folded corner
+and a white lab flask with light-blue liquid. It is the favicon, the 36px logo beside the list
+heading, and the 22px logo in the top bar's back link.
+
 ## Configuration
 
 | Env var | Default | Meaning |
 |---|---|---|
 | `PORT` | `3000` | Port the server listens on (bound to `0.0.0.0`). In dev, the Vite proxy targets it too. |
 | `DATA_DIR` | `./data` | Directory holding `notes.db` |
+
+Empty values count as unset. A `PORT` that is not an integer from 1 to 65535 exits at startup with
+one clear error line.
+
+**Logging:** Fastify's logger is on (startup, errors), but per-request logging is disabled, so the
+container's logs don't grow with every request.
 
 Under Compose, `PORT` is the **host** port only; the container always listens on 3000.
 
@@ -258,8 +287,8 @@ Under Compose, `PORT` is the **host** port only; the container always listens on
    `USER node`; `EXPOSE 3000`; `CMD ["node", "server/index.ts"]` (exec form, so Node is PID 1 and
    receives signals).
 
-**Shutdown:** on `SIGTERM`/`SIGINT`, `index.ts` awaits `app.close()`, closes the database, then
-`process.exit(0)`. Fastify 5's default `forceCloseConnections: "idle"` keeps idle keep-alive
+**Shutdown:** on `SIGTERM`/`SIGINT`, `index.ts` awaits `app.close()` (whose `onClose` hook closes
+the database), then exits: code 0, or 1 with the error logged if closing failed. Fastify 5's default `forceCloseConnections: "idle"` keeps idle keep-alive
 sockets from delaying this.
 
 `compose.yaml`:
