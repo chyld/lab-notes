@@ -74,6 +74,7 @@ web/
     NotePage.tsx            # route "/notes/:id" (id may be "new"): loading
     NoteEditor.tsx          # the Tiptap editor and Save
     Toolbar.tsx             # formatting toolbar for the editor
+    ToolButton.tsx          # shared toolbar icon button + divider
     FontPicker.tsx          # Google Fonts browser (toolbar control)
     FontSizeControl.tsx     # − [size] + (toolbar control)
     fonts.ts                # catalog loading, Google Fonts <link> loading, font-family values
@@ -268,8 +269,9 @@ with one). These are expected.
 ### Toolbar
 
 `Toolbar.tsx` renders one row directly under the top bar. The top bar and toolbar stick to the top
-together while the page scrolls. It exposes exactly what StarterKit v3 already supports, in
-Google Docs order, as groups separated by thin dividers:
+together while the page scrolls. It exposes what StarterKit v3 supports plus font family and size
+(Tiptap's `TextStyle`, `FontFamily`, `FontSize`), in Google Docs order, as groups separated by thin
+dividers. `ToolButton.tsx` holds the shared icon button (`Tool`) and divider:
 
 | Group | Controls |
 |---|---|
@@ -283,8 +285,8 @@ Google Docs order, as groups separated by thin dividers:
 | Blocks | Quote, Code block, Horizontal line |
 | Clear | Clear formatting |
 
-Nothing else: no font family/size, colors, highlight, alignment, indent buttons, images, tables, or
-anything StarterKit does not include. StarterKit's shortcuts without a control (e.g. Shift+Enter
+Nothing else: no colors, highlight, alignment, indent buttons, images, tables, or anything
+StarterKit and the text-style extensions above don't include. StarterKit's shortcuts without a control (e.g. Shift+Enter
 line break, `Ctrl+Alt+0`–`6` paragraph/heading) keep working.
 
 Behavior:
@@ -380,8 +382,13 @@ it isn't in the main bundle.
   render its name in its own font while downloading only those glyphs.
 - Both dedupe by family and only accept names matching `^[A-Za-z0-9 ]+$` (all catalog names do);
   anything else is ignored, so odd stored data can't build a strange URL.
-- Fonts used by a note load when it opens and whenever its content changes: the editor scans the
-  document's `textStyle` marks for `fontFamily` and calls `loadFont` for each.
+- `loadFont` and `loadPreview` keep separate dedupe keys; a preview is skipped once the full font
+  is linked, and the full font is always appended after any preview (a preview sheet has one face
+  with only the name's glyphs and would otherwise shadow the full font).
+- Fonts used by a note load when it opens (`onCreate`) and whenever its content changes
+  (`onUpdate`): `loadDocumentFonts` scans the document's `textStyle` marks, takes each
+  `fontFamily`'s first family (unquoted), and loads only families that are in the catalog, so a
+  font pasted in from elsewhere (e.g. `Arial`) is never requested from Google.
 
 **Stored value.** Choosing a font stores a CSS font stack, `"Family Name", <generic>`, where the
 generic comes from the category (Serif → `serif`, Handwriting → `cursive`, Monospace →
@@ -390,9 +397,14 @@ unreachable. The UI shows the first family in the stack without quotes.
 
 **Font picker** (`FontPicker.tsx`), in the toolbar after the text-style select:
 
-- A button showing the font at the selection (`getAttributes("textStyle").fontFamily`, first
-  family) or `Default`, ~140px wide with an ellipsis, `aria-haspopup="listbox"`,
-  `aria-expanded`.
+- A button showing the font at the selection or `Default`, ~140px wide with an ellipsis,
+  `aria-haspopup="listbox"`, `aria-expanded`. "At the selection" is `textStyleAt(editor)`
+  (`editor.ts`): at a cursor, the stored marks if set (even an empty set, e.g. after Clear
+  formatting) else the marks at the cursor; for a range, the marks of the node at its start.
+  (`editor.getAttributes("textStyle")` returns the first textStyle anywhere in a range and ignores
+  cleared stored marks, so it isn't used.) The size control uses the same helper.
+- Disabled (with the size control) where `editor.can().setFontFamily(...)` /
+  `setFontSize(...)` is false, i.e. in code blocks and inline code.
 - Clicking opens a popover rendered in a portal on `document.body` with `position: fixed` under
   the button (the toolbar scrolls horizontally, which would clip an absolutely positioned child).
   It contains: a search box (focused on open), category chips (All, Sans Serif, Serif, Display,
@@ -402,8 +414,14 @@ unreachable. The UI shows the first family in the stack without quotes.
   `loadPreview` when a row scrolls into view.
 - Search is a case-insensitive substring match on the family name, combined with the category.
   `Loading fonts…` shows until the catalog import resolves.
-- Keyboard: ↑/↓ move the highlight (scrolled into view), Enter applies it, Esc closes. Clicking a
-  row applies it. Clicking outside the popover, or resizing the window, closes it.
+- The search box is a `role="combobox"` with `aria-controls` the listbox and
+  `aria-activedescendant` the highlighted option (each option has a stable id). On open the
+  highlight is the current font; a search highlights its first match.
+- Keyboard: ↑/↓ move the highlight (scrolled into view), Enter applies it (ignored while an IME is
+  composing, and a no-op when the search matches nothing), Esc closes and returns focus to the
+  editor. Clicking a row applies it. Rows and category chips cancel `mousedown`, so focus stays in
+  the search box. Clicking outside the popover, resizing the window, or scrolling anything outside
+  the popover (the toolbar scrolls sideways) closes it.
 - Applying runs `loadFont(family)` and `editor.chain().focus().setFontFamily(stack).run()`, then
   closes. The editor keeps its selection while the popover has focus, so the font lands on the
   text that was selected.
@@ -414,9 +432,14 @@ small number input, a `+` button. Units are points (`pt`).
 - The input shows the size at the selection start: the `textStyle` `fontSize` if set, otherwise
   the computed CSS font size of the text at the cursor converted to points (px × 0.75, rounded),
   so headings show their real size (e.g. Heading 1 → 24).
-- Typing a number and pressing Enter (or leaving the input) applies `setFontSize("<n>pt")`;
-  `−`/`+` apply the current size −1 / +1. Sizes are whole numbers clamped to 1–400. Non-numeric
-  input reverts. Enter returns focus to the editor; `−`/`+` follow the toolbar button focus rules.
+- A stored `fontSize` in `pt` or `px` is converted to points; other units (e.g. `em` from pasted
+  HTML) fall back to the computed size. The shown number is rounded for display only.
+- The input (`type="text"`, `inputmode="numeric"`) keeps what the user types as a draft (in a ref,
+  since blur can fire in the same tick as Enter/Escape). Only a typed draft is applied: Enter
+  applies `setFontSize("<n>pt")` and returns focus to the editor; leaving the input applies it
+  without refocusing; Esc discards it. Merely focusing and leaving the input changes nothing.
+  `−`/`+` apply the shown size −1 / +1 and follow the toolbar button focus rules; they're
+  disabled at 1 and 400. Sizes are whole numbers clamped to 1–400; non-numeric input reverts.
 - Labels: `aria-label="Decrease font size"`, `"Font size"`, `"Increase font size"`.
 
 **Privacy.** Because fonts are linked from Google (the user's choice over self-hosting), a browser
@@ -497,6 +520,7 @@ write to it (a bind mount would not).
 | `npm run typecheck` | `tsc -p tsconfig.web.json && tsc -p tsconfig.server.json` |
 | `npm test` | `node --test server/` |
 | `npm start` | `node server/index.ts` (serves `dist/web` if present) |
+| `npm run fonts:update` | Regenerates `web/src/google-fonts.json` from Google Fonts metadata |
 
 Tests build the app with `dbPath: ":memory:"` and no `staticDir`, and `close()` it afterwards;
 they never touch `./data`.
