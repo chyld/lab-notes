@@ -248,7 +248,8 @@ case properly (SQLite's `LIKE` only folds ASCII).
 **Favorite fonts:** `:family` (URL-encoded; `Open%20Sans`) must be at most 100 characters of
 letters and digits in words separated by single spaces (`^[A-Za-z0-9]+( [A-Za-z0-9]+)*$`; every
 Google Fonts family is), else `400`. The router's `maxParamLength` is raised to 300 (it counts the
-still-encoded length, and `%20` is three characters). At most 200 favorites: a `PUT` of a new one
+still-encoded length, and `%20` is three characters); a param past that is refused by the router
+before validation, `414 { error }` (URI Too Long). At most 200 favorites: a `PUT` of a new one
 past that → `400 { error: "Too many favorite fonts" }`. Both writes are idempotent; re-adding keeps
 a favorite's place. Listed `ORDER BY added_at, rowid` (rowid breaks a same-millisecond tie). Not
 part of any note; no Save involved.
@@ -608,7 +609,8 @@ State and the request queue live in `favoriteFonts.ts`; `FontPicker.tsx` renders
   below, so it sees any write still in flight). Meanwhile it shows the last list it had (a
   module-level cache, empty on the first open), so an unchanged list doesn't jump. Stars and the
   shortcut stay off until that fetch answers: before then the picker doesn't know what's starred.
-  If it fails they stay off and the cached group (if any) still shows.
+  If it fails they stay off and the cached group (if any) still shows; trying to toggle then says
+  "Couldn't load favorites. Close the font list and try again." (`role="alert"`).
 - **Order of rows:** `Default` first, as before. Then, when any favorite matches the current
   search and category, a "Favorites" group (catalog families only, in the order added), then an
   "All fonts" group with every match as before (favorites appear there too, in their usual place).
@@ -625,17 +627,19 @@ State and the request queue live in `favoriteFonts.ts`; `FontPicker.tsx` renders
   always (faint) on touch screens (`@media (hover: none)`). The star is a decorative, mouse/touch
   target (`aria-hidden`, a `span`, no tab stop), since an option's contents aren't exposed to
   screen readers. Clicking it toggles the favorite and doesn't apply the font; like the row, it
-  cancels `mousedown` so focus stays in the search box. Its `title`: "Add to favorites (Ctrl+D)" /
-  "Remove from favorites (Ctrl+D)" (⌘D on macOS). A favorite's option name ends in ", favorite"
+  cancels `mousedown` so focus stays in the search box. Its `title` (only once stars respond):
+  "Add to favorites (Ctrl+D)" / "Remove from favorites (Ctrl+D)" (⌘D on macOS). A favorite's option name ends in ", favorite"
   (visually hidden text), and the search box has `aria-keyshortcuts`.
 - **Keyboard:** Ctrl+D (⌘D on macOS: exactly that modifier, no Shift or Alt; ignored on key repeat
-  and while an IME is composing) in the search box toggles the highlighted font, with
-  `preventDefault` so the browser doesn't bookmark the page. Nothing on `Default`.
+  and while an IME is composing) anywhere in the popover (the search box or a focused chip)
+  toggles the highlighted font, with `preventDefault` so the browser doesn't bookmark the page.
+  The D key is matched by its letter, or by its position (`code` `KeyD`) when the layout doesn't
+  type Latin letters (Cyrillic, Greek). Nothing on `Default`.
 - **Announcements:** a visually hidden `role="status"` says "Added Lobster to favorites" /
   "Removed Lobster from favorites".
 - **Highlight:** tracked by row identity, not index (↑/↓ walk the flat list of options in display
-  order, skipping headings). It's set when the popover is ready (catalog loaded and the favorites
-  fetch settled) and on every search or category change:
+  order, skipping headings). It's set when the catalog loads, on every search or category change,
+  and again when the favorites fetch settles (unless ↑/↓ have moved it since):
   - no search, Favorites group showing: the current font's Favorites row if it's a favorite, else
     `Default`; the list opens at the top, favorites in view;
   - no search, no group: the current font's row, else `Default` (as before);
@@ -647,9 +651,11 @@ State and the request queue live in `favoriteFonts.ts`; `FontPicker.tsx` renders
 - **Toggling** updates the list at once (optimistic, and the cache) and queues
   `addFavoriteFont` / `removeFavoriteFont`. All favorites requests run one at a time, in order
   (one module-level queue that outlives the popover), so a quick star-unstar can't reach the
-  server reversed. If a write fails, that font is reverted unless it's been toggled again since
-  (newer toggle wins), and the popover shows "Couldn't update favorites: <server message>"
-  (`role="alert"`) below the list until the next toggle. Writes finish even if the popover closes.
+  server reversed. If a write fails and it was that font's latest toggle, the popover shows
+  "Couldn't update favorites: <server message>" (`role="alert"`) below the list until the next
+  toggle, and refetches the list to match the server (ignored if anything was toggled meanwhile);
+  if that fetch fails too, just that font's change is undone (a removed favorite goes back before
+  the first of its old successors still listed). Writes finish even if the popover closes.
 - **Other devices:** the server keeps the last write it receives; another device's changes show
   the next time the picker opens.
 

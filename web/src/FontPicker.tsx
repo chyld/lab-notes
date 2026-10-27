@@ -26,9 +26,12 @@ const POPOVER_WIDTH = 300;
 const IS_MAC = isMacOS();
 const FAVORITE_KEYS = IS_MAC ? "⌘D" : "Ctrl+D";
 
-/** Ctrl+D, or ⌘D on macOS: exactly that modifier. */
+/**
+ * Ctrl+D, or ⌘D on macOS: exactly that modifier. By the D key's letter, or its position when the
+ * layout doesn't type Latin letters (Cyrillic, Greek), where the browser still bookmarks on it.
+ */
 const isFavoriteShortcut = (event: KeyboardEvent) =>
-  event.key.toLowerCase() === "d" &&
+  (event.key.toLowerCase() === "d" || (!/^[a-z]$/i.test(event.key) && event.code === "KeyD")) &&
   (IS_MAC ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) &&
   !event.altKey &&
   !event.shiftKey;
@@ -38,6 +41,16 @@ const isFavoriteShortcut = (event: KeyboardEvent) =>
 const optionId = (key: string) => `font-option-${key.replace(/ /g, "-")}`;
 
 type Row = { key: string; font: CatalogFont | null };
+
+/**
+ * Where a highlighted key is in the list. A Favorites row that's gone (unstarred, or its star
+ * undone after a failed save) falls back to the same font in All fonts; anything else to Default.
+ */
+function indexOfKey(rows: Row[], key: string): number {
+  let index = rows.findIndex((row) => row.key === key);
+  if (index < 0 && key.startsWith("fav:")) index = rows.findIndex((row) => row.key === `all:${key.slice(4)}`);
+  return Math.max(0, index);
+}
 
 // One observer for all rows: a row's preview font loads the first time it scrolls into view.
 let previewObserver: IntersectionObserver | null = null;
@@ -106,6 +119,7 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
   const [announcement, setAnnouncement] = useState("");
   // Per family, bumped on every toggle: a failed write is undone only if it's still the latest.
   const toggles = useRef(new Map<string, number>());
+  const toggleCountRef = useRef(0); // all toggles, any font
   const popoverRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const position = usePopoverPosition(anchor, POPOVER_WIDTH);
@@ -170,18 +184,15 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
     ],
     [favoriteMatches, matches],
   );
-  const activeIndex = Math.max(
-    0,
-    rows.findIndex((row) => row.key === active.key),
-  );
-  const activeRow = rows[activeIndex];
+  const activeRow = rows[indexOfKey(rows, active.key)];
 
-  // Where the highlight starts: once the catalog is in (again when the favorites fetch settles,
-  // since the Favorites group can change it), and on every search or category change. Toggling a
-  // favorite doesn't move it.
-  const favoritesSettled = favoritesStatus !== "loading";
-  useEffect(() => {
+  // Where the highlight starts: once the catalog is in, and on every search or category change;
+  // again when the favorites fetch settles (the Favorites group can change it) unless ↑/↓ have
+  // moved it since. Toggling a favorite doesn't move it.
+  const movedByKeyRef = useRef(false);
+  function resetHighlight() {
     if (fonts === null) return;
+    movedByKeyRef.current = false;
     if (q) {
       const first = favoriteMatches[0] ?? null;
       setActive(first ? `fav:${first[0]}` : matches[0] ? `all:${matches[0][0]}` : "default", true);
@@ -193,8 +204,13 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
     } else {
       setActive(matches.some(([family]) => family === current) ? `all:${current}` : "default", true);
     }
-    // Not the favorites list itself: a toggle changes it but must not move the highlight.
-  }, [fonts, favoritesSettled, q, category, current]);
+  }
+  // Not the favorites list itself: a toggle changes it but must not move the highlight.
+  useEffect(resetHighlight, [fonts, q, category, current]);
+  const favoritesSettled = favoritesStatus !== "loading";
+  useEffect(() => {
+    if (favoritesSettled && !movedByKeyRef.current) resetHighlight();
+  }, [favoritesSettled]);
 
   useEffect(() => {
     if (active.scroll) document.getElementById(optionId(active.key))?.scrollIntoView({ block: "nearest" });
@@ -213,26 +229,43 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
   }
 
   function toggleFavorite(family: string, fromKeyboard: boolean) {
-    if (favoritesStatus !== "ready") return;
+    if (favoritesStatus === "failed") {
+      // The list didn't load, so this toggle can't be trusted: say why nothing happens.
+      setFavoriteError("Couldn't load favorites. Close the font list and try again.");
+      return;
+    }
+    if (favoritesStatus !== "ready") return; // a moment, until the list answers
     const before = favoritesRef.current;
     const wasFavorite = before.includes(family);
-    const index = before.indexOf(family);
     setFavorites(wasFavorite ? before.filter((f) => f !== family) : [...before, family]);
     const toggle = (toggles.current.get(family) ?? 0) + 1;
     toggles.current.set(family, toggle);
+    toggleCountRef.current += 1;
     setFavoriteError(null);
     setAnnouncement(wasFavorite ? `Removed ${family} from favorites` : `Added ${family} to favorites`);
     // The highlighted Favorites row is going away: keep the highlight on the same font.
     if (wasFavorite && active.key === `fav:${family}`) setActive(`all:${family}`, fromKeyboard);
-    saveFavoriteFont(family, !wasFavorite).catch((err: unknown) => {
+    saveFavoriteFont(family, !wasFavorite).catch(async (err: unknown) => {
       if (toggles.current.get(family) !== toggle) return; // toggled again since: the newer one wins
-      const now = favoritesRef.current;
-      if (wasFavorite && !now.includes(family)) {
-        setFavorites([...now.slice(0, index), family, ...now.slice(index)]);
-      } else if (!wasFavorite) {
-        setFavorites(now.filter((f) => f !== family));
-      }
       setFavoriteError(`Couldn't update favorites: ${errorMessage(err)}`);
+      // Back to what the server has (an earlier toggle of this font may have failed too). Unless
+      // something was toggled meanwhile: then the fetched list is already out of date.
+      const seen = toggleCountRef.current;
+      try {
+        const list = await fetchFavoriteFonts();
+        if (toggleCountRef.current === seen) setFavorites(list);
+      } catch {
+        // Server unreachable: undo just this change here. A removed favorite goes back before
+        // the first of its old successors that's still there, so the order added holds.
+        const now = favoritesRef.current;
+        if (wasFavorite && !now.includes(family)) {
+          const successors = before.slice(before.indexOf(family) + 1);
+          const at = now.findIndex((f) => successors.includes(f));
+          setFavorites(at < 0 ? [...now, family] : [...now.slice(0, at), family, ...now.slice(at)]);
+        } else if (!wasFavorite) {
+          setFavorites(now.filter((f) => f !== family));
+        }
+      }
     });
   }
 
@@ -252,18 +285,22 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
       editor.commands.focus();
       return;
     }
-    // Arrows and Enter drive the list only from the search box; Enter on a chip toggles the chip.
-    if (event.target !== searchRef.current) return;
+    // Anywhere in the popover (a focused chip too), so it never bookmarks the page instead.
     if (isFavoriteShortcut(event)) {
       event.preventDefault(); // not the browser's bookmark shortcut
       if (event.repeat || event.nativeEvent.isComposing) return;
       if (activeRow.font) toggleFavorite(activeRow.font[0], true);
-    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      return;
+    }
+    // Arrows and Enter drive the list only from the search box; Enter on a chip toggles the chip.
+    if (event.target !== searchRef.current) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
+      movedByKeyRef.current = true;
       const step = event.key === "ArrowDown" ? 1 : -1;
       // From the latest highlight, so two presses before a render move two rows.
       setActiveState((prev) => {
-        const from = Math.max(0, rows.findIndex((row) => row.key === prev.key));
+        const from = indexOfKey(rows, prev.key);
         return { key: rows[Math.min(rows.length - 1, Math.max(0, from + step))].key, scroll: true };
       });
     } else if (event.key === "Enter") {
@@ -427,7 +464,7 @@ const FontRow = memo(function FontRow(props: RowProps) {
         <span
           className={favorite ? "font-star on" : "font-star"}
           aria-hidden
-          title={`${favorite ? "Remove from" : "Add to"} favorites (${FAVORITE_KEYS})`}
+          title={canFavorite ? `${favorite ? "Remove from" : "Add to"} favorites (${FAVORITE_KEYS})` : undefined}
           onClick={(event) => {
             event.stopPropagation(); // starring doesn't apply the font
             onStar(font[0]);

@@ -489,6 +489,10 @@ test("favorite fonts: rejects family names that aren't Google Fonts-shaped", asy
   const ok = await fresh.inject({ method: "PUT", url: `/api/favorite-fonts/${encodeURIComponent(longest)}` });
   assert.equal(ok.statusCode, 204);
   assert.deepEqual((await fresh.inject({ method: "GET", url: "/api/favorite-fonts" })).json(), [longest]);
+  // Over the router's still-encoded limit (300): refused before validation, as URI Too Long.
+  const huge = await fresh.inject({ method: "PUT", url: `/api/favorite-fonts/${"A".repeat(301)}` });
+  assert.equal(huge.statusCode, 414);
+  assert.equal(typeof huge.json().error, "string");
   await fresh.close();
 });
 

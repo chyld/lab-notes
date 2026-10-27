@@ -54,7 +54,7 @@ const idParams = {
 const familyParams = {
   type: "object",
   required: ["family"],
-  properties: { family: { type: "string", maxLength: 100, pattern: "^[A-Za-z0-9]+( [A-Za-z0-9]+)*$" } },
+  properties: { family: { type: "string", minLength: 1, maxLength: 100, pattern: "^[A-Za-z0-9]+( [A-Za-z0-9]+)*$" } },
 } as const;
 
 export const MAX_FAVORITE_FONTS = 200;
