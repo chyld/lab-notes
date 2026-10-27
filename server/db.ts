@@ -29,7 +29,8 @@ export function openDb(path: string) {
     );
   `);
 
-  const list = db.prepare("SELECT id, title FROM notes ORDER BY updated_at DESC, id ASC");
+  // rowid breaks ties between saves in the same millisecond (latest insert first).
+  const list = db.prepare("SELECT id, title FROM notes ORDER BY updated_at DESC, rowid DESC");
   const get = db.prepare("SELECT * FROM notes WHERE id = ?");
   const insert = db.prepare(
     "INSERT INTO notes (id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",

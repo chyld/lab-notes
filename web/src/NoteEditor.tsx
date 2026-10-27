@@ -16,6 +16,8 @@ export function NoteEditor({ initialNote, onCreated }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const versionRef = useRef(0);
+  // Set synchronously, unlike `saving`, so two clicks in one tick can't both save (and both POST).
+  const savingRef = useRef(false);
   const noteIdRef = useRef(initialNote?.id ?? null);
   const mountedRef = useRef(false);
 
@@ -40,7 +42,8 @@ export function NoteEditor({ initialNote, onCreated }: Props) {
   const dirty = version !== savedVersion;
 
   async function save() {
-    if (!editor || saving) return;
+    if (!editor || savingRef.current) return;
+    savingRef.current = true;
     const startVersion = versionRef.current;
     const content = editor.getJSON();
     setSaving(true);
@@ -58,6 +61,7 @@ export function NoteEditor({ initialNote, onCreated }: Props) {
     } catch (err) {
       if (mountedRef.current) setError(errorMessage(err));
     } finally {
+      savingRef.current = false;
       if (mountedRef.current) setSaving(false);
     }
   }

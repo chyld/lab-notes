@@ -61,3 +61,12 @@ test("never throws on malformed input", () => {
   assert.equal(extractTitle(doc({ type: "paragraph", content: "x" })), "Untitled");
   assert.equal(extractTitle(doc(p({ type: "text", text: 123 }, text("fine")))), "fine");
 });
+
+test("handles very deep and very wide input without overflowing the stack", () => {
+  let node: object = p(text("bottom"));
+  for (let i = 0; i < 100_000; i++) node = { type: "blockquote", content: [node] };
+  assert.equal(extractTitle(doc(node)), "bottom");
+
+  const wide = Array.from({ length: 300_000 }, () => ({ type: "horizontalRule" }));
+  assert.equal(extractTitle(doc({ type: "blockquote", content: [...wide, p(text("after"))] })), "after");
+});

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import Fastify, { type FastifyError } from "fastify";
+import { join } from "node:path";
+import Fastify, { LogController, type FastifyError, type FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
 import { openDb, type NoteRow } from "./db.ts";
 import { extractTitle } from "./title.ts";
@@ -17,10 +18,11 @@ const docBody = {
   properties: {
     content: {
       type: "object",
-      required: ["type"],
+      required: ["type", "content"],
       properties: {
         type: { const: "doc" },
-        content: { type: "array", items: { type: "object" } },
+        // ProseMirror's doc needs at least one block, or the editor can't open it.
+        content: { type: "array", minItems: 1, items: { type: "object" } },
       },
     },
   },
@@ -32,8 +34,26 @@ const idParams = {
   properties: { id: { type: "string" } },
 } as const;
 
-type DocBody = { content: { type: "doc"; content?: object[] } };
+type DocBody = { content: { type: "doc"; content: object[] } };
 type IdParams = { id: string };
+
+// JSON nesting levels (each Tiptap node level is two: the node and its content array).
+// Real documents stay far below this; the cap keeps recursive JSON handling off the stack limit.
+const MAX_DOC_DEPTH = 200;
+
+function exceedsMaxDepth(value: unknown): boolean {
+  const stack: Array<[unknown, number]> = [[value, 1]];
+  while (stack.length > 0) {
+    const [current, depth] = stack.pop()!;
+    if (depth > MAX_DOC_DEPTH) return true;
+    if (typeof current === "object" && current !== null) {
+      for (const child of Object.values(current)) stack.push([child, depth + 1]);
+    }
+  }
+  return false;
+}
+
+const tooDeep = { error: "Document is nested too deeply" };
 
 function toNote(row: NoteRow) {
   return {
@@ -46,7 +66,15 @@ function toNote(row: NoteRow) {
 }
 
 export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
-  const app = Fastify({ logger, ajv: { customOptions: { coerceTypes: false } } });
+  const app = Fastify({
+    logger,
+    logController: new LogController({ disableRequestLogging: true }),
+    ajv: { customOptions: { coerceTypes: false } },
+    // Errors raised before routing (e.g. a malformed %-escape) also use the { error } shape.
+    frameworkErrors: (err, _request, reply) => {
+      (reply as FastifyReply).code(err.statusCode ?? 400).send({ error: err.message });
+    },
+  });
   const db = openDb(dbPath);
   app.addHook("onClose", async () => db.close());
 
@@ -59,7 +87,7 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
     return reply.code(500).send({ error: "Internal server error" });
   });
 
-  const serveStatic = staticDir !== undefined && existsSync(staticDir);
+  const serveStatic = staticDir !== undefined && existsSync(join(staticDir, "index.html"));
   if (serveStatic) {
     app.register(fastifyStatic, { root: staticDir });
   }
@@ -86,6 +114,7 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
   });
 
   app.post<{ Body: DocBody }>("/api/notes", { schema: { body: docBody } }, async (request, reply) => {
+    if (exceedsMaxDepth(request.body.content)) return reply.code(400).send(tooDeep);
     const now = new Date().toISOString();
     const row: NoteRow = {
       id: randomUUID(),
@@ -104,6 +133,7 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
     async (request, reply) => {
       const { id } = request.params;
       const content = request.body.content;
+      if (exceedsMaxDepth(content)) return reply.code(400).send(tooDeep);
       const updated = db.updateNote(id, extractTitle(content), JSON.stringify(content), new Date().toISOString());
       if (!updated) return reply.code(404).send({ error: "Note not found" });
       return toNote(db.getNote(id)!);

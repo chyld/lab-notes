@@ -61,6 +61,21 @@ test("lists id and title, most recently saved first", async () => {
   assert.equal(list[0].title, "older, edited");
 });
 
+test("saves in the same millisecond still list latest first", async () => {
+  const fresh = buildApp({ dbPath: ":memory:" });
+  const ids: string[] = [];
+  for (let i = 0; i < 30; i++) {
+    const res = await fresh.inject({ method: "POST", url: "/api/notes", payload: { content: doc(`n${i}`) } });
+    ids.push(res.json().id);
+  }
+  const list = (await fresh.inject({ method: "GET", url: "/api/notes" })).json();
+  assert.deepEqual(
+    list.map((n: { id: string }) => n.id),
+    ids.toReversed(),
+  );
+  await fresh.close();
+});
+
 test("unknown note ids are 404 { error }", async () => {
   const get = await app.inject({ method: "GET", url: "/api/notes/nope" });
   assert.equal(get.statusCode, 404);
@@ -78,11 +93,46 @@ test("invalid bodies are 400 { error } and are not coerced", async () => {
     { content: { type: "paragraph" } },
     { content: { type: "doc", content: "x" } },
     { content: { type: "doc", content: [null] } },
+    { content: { type: "doc" } },
+    { content: { type: "doc", content: [] } },
   ];
   for (const payload of bad) {
     const res = await app.inject({ method: "POST", url: "/api/notes", payload });
     assert.equal(res.statusCode, 400, JSON.stringify(payload));
     assert.equal(typeof res.json().error, "string");
+    assert.deepEqual(Object.keys(res.json()), ["error"]);
+  }
+});
+
+test("over-deep documents are 400 { error } and nothing is stored", async () => {
+  let node: object = { type: "paragraph", content: [{ type: "text", text: "deep" }] };
+  for (let i = 0; i < 5000; i++) node = { type: "blockquote", content: [node] };
+  const deep = { type: "doc", content: [node] };
+  const before = (await app.inject({ method: "GET", url: "/api/notes" })).json().length;
+
+  const post = await app.inject({ method: "POST", url: "/api/notes", payload: { content: deep } });
+  assert.equal(post.statusCode, 400);
+  assert.deepEqual(post.json(), { error: "Document is nested too deeply" });
+  assert.equal((await app.inject({ method: "GET", url: "/api/notes" })).json().length, before);
+
+  const note = await create("shallow");
+  const put = await app.inject({ method: "PUT", url: `/api/notes/${note.id}`, payload: { content: deep } });
+  assert.equal(put.statusCode, 400);
+  assert.equal((await app.inject({ method: "GET", url: `/api/notes/${note.id}` })).json().title, "shallow");
+});
+
+test("realistically nested documents are accepted", async () => {
+  let node: object = { type: "paragraph", content: [{ type: "text", text: "nested list" }] };
+  for (let i = 0; i < 40; i++) node = { type: "bulletList", content: [{ type: "listItem", content: [node] }] };
+  const res = await app.inject({ method: "POST", url: "/api/notes", payload: { content: { type: "doc", content: [node] } } });
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.json().title, "nested list");
+});
+
+test("malformed URLs are 400 { error }", async () => {
+  for (const url of ["/api/notes/%ZZ", "/api/notes/%E0%A4%A"]) {
+    const res = await app.inject({ method: "GET", url });
+    assert.equal(res.statusCode, 400, url);
     assert.deepEqual(Object.keys(res.json()), ["error"]);
   }
 });
@@ -138,6 +188,20 @@ test("with a static dir: SPA fallback for GET pages only", async (t) => {
   for (const [method, url] of misses) {
     const res = await web.inject({ method, url });
     assert.equal(res.statusCode, 404, `${method} ${url}`);
+    assert.deepEqual(res.json(), { error: "Not found" });
+  }
+});
+
+test("a static dir without index.html serves no SPA fallback", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "notes-static-"));
+  const web = buildApp({ dbPath: ":memory:", staticDir: dir });
+  t.after(async () => {
+    await web.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  for (const url of ["/", "/notes/abc"]) {
+    const res = await web.inject({ method: "GET", url });
+    assert.equal(res.statusCode, 404, url);
     assert.deepEqual(res.json(), { error: "Not found" });
   }
 });

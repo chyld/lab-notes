@@ -11,12 +11,15 @@ function children(node: Node): unknown[] {
 }
 
 // Depth-first, in document order: the first textblock is the note's first line.
-function findFirstTextblock(node: Node): Node | null {
-  for (const child of children(node)) {
-    if (!isNode(child)) continue;
-    if (typeof child.type === "string" && TEXTBLOCKS.has(child.type)) return child;
-    const found = findFirstTextblock(child);
-    if (found) return found;
+// Uses an explicit stack so arbitrarily deep input can't overflow the call stack.
+function findFirstTextblock(doc: Node): Node | null {
+  const stack = children(doc).toReversed();
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!isNode(node)) continue;
+    if (typeof node.type === "string" && TEXTBLOCKS.has(node.type)) return node;
+    const kids = children(node);
+    for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
   }
   return null;
 }
