@@ -163,6 +163,12 @@ button:disabled {
   margin-top: 0;
 }
 
+/* No space between paragraphs: Enter starts the next line directly below (the user adds a blank
+   line for space). Paragraphs in lists and quotes too. */
+.page p {
+  margin: 0;
+}
+
 .page blockquote {
   margin-left: 0;
   padding-left: 1rem;
