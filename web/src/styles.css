@@ -147,6 +147,10 @@ button:disabled {
   flex-direction: column;
 }
 
+.page-wrap {
+  position: relative; /* positions the line-number gutter */
+}
+
 .page .ProseMirror {
   flex: 1;
   padding: 2rem 3rem;
@@ -382,9 +386,43 @@ button:disabled {
   background: #c7c7c7;
 }
 
+/* Line numbers: a gutter in the left margin, 1rem left of the text. */
+
+.with-line-numbers .page .ProseMirror {
+  padding-left: 4.5rem;
+}
+
+.line-numbers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3.5rem;
+  pointer-events: none;
+  user-select: none;
+}
+
+.line-numbers span {
+  position: absolute;
+  right: 0;
+  display: flex;
+  align-items: center;
+  color: #5f6368;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
 @media (max-width: 816px) {
   .page .ProseMirror {
     padding: 1.5rem 1.25rem;
+  }
+
+  .with-line-numbers .page .ProseMirror {
+    padding-left: 3rem;
+  }
+
+  .line-numbers {
+    width: 2.25rem;
   }
 }
 

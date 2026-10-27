@@ -2,6 +2,7 @@ import { useEditorState, type Editor } from "@tiptap/react";
 import {
   Bold,
   Code,
+  Hash,
   Italic,
   Link as LinkIcon,
   List,
@@ -41,7 +42,9 @@ function normalizeHref(input: string): string {
 /** A scheme with nothing after it, like the untouched "https://" default. */
 const isSchemeOnly = (href: string) => /^[a-z][a-z0-9+.-]*:\/*$/i.test(href);
 
-export function Toolbar({ editor }: { editor: Editor }) {
+type Props = { editor: Editor; lineNumbers: boolean; onToggleLineNumbers: () => void };
+
+export function Toolbar({ editor, lineNumbers, onToggleLineNumbers }: Props) {
   const state = useEditorState({
     editor,
     selector: ({ editor }) => ({
@@ -178,6 +181,9 @@ export function Toolbar({ editor }: { editor: Editor }) {
         <Tool icon={Minus} label="Horizontal line" onClick={(k) => chain(k).setHorizontalRule().run()} disabled={!state.canHorizontalRule} />
         <Divider />
         <Tool icon={RemoveFormatting} label="Clear formatting" onClick={clearFormatting} />
+        <Divider />
+        {/* A view setting: it never touches the document. */}
+        <Tool icon={Hash} label="Line numbers" onClick={onToggleLineNumbers} active={lineNumbers} />
       </div>
     </div>
   );

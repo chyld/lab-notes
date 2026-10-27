@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { createNote, errorMessage, updateNote, type Note } from "./api.ts";
 import { extensions, loadDocumentFonts } from "./editor.ts";
+import { LineNumbers, useLineNumbersSetting } from "./LineNumbers.tsx";
 import { Toolbar } from "./Toolbar.tsx";
 import { TopBar } from "./TopBar.tsx";
 
@@ -21,6 +22,7 @@ export function NoteEditor({ initialNote, onCreated }: Props) {
   const savingRef = useRef(false);
   const noteIdRef = useRef(initialNote?.id ?? null);
   const mountedRef = useRef(false);
+  const [lineNumbers, toggleLineNumbers] = useLineNumbersSetting();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -82,10 +84,11 @@ export function NoteEditor({ initialNote, onCreated }: Props) {
             {saving ? "Saving…" : "Save"}
           </button>
         </TopBar>
-        {editor && <Toolbar editor={editor} />}
+        {editor && <Toolbar editor={editor} lineNumbers={lineNumbers} onToggleLineNumbers={toggleLineNumbers} />}
       </div>
-      <main className="page-wrap">
+      <main className={lineNumbers ? "page-wrap with-line-numbers" : "page-wrap"}>
         <EditorContent editor={editor} className="page" />
+        {editor && lineNumbers && <LineNumbers editor={editor} />}
       </main>
     </div>
   );
