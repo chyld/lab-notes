@@ -26,7 +26,7 @@ version history, dates or previews in the list, images/uploads.
 | Server | `fastify@^5`, `@fastify/static@^10` | Small, fast, JSON-schema validation, `inject()` for tests. |
 | Database | SQLite via `node:sqlite` (`DatabaseSync`), WAL mode | One file, zero ops. |
 | Frontend | `react@^19`, `react-dom@^19`, `vite@^8`, `@vitejs/plugin-react@^6` | Tiptap's first-class binding is React. |
-| Editor | `@tiptap/react@^3`, `@tiptap/pm@^3`, `@tiptap/starter-kit@^3` | StarterKit defaults, unmodified. |
+| Editor | `@tiptap/react@^3`, `@tiptap/pm@^3`, `@tiptap/starter-kit@^3` | StarterKit defaults, except `link.openOnClick: false` (see Toolbar). |
 | Routing | `react-router@^8`, declarative mode (`BrowserRouter`, `Routes`, `Route`) | Two routes, plus a catch-all "Page not found". |
 | Types | `typescript@^7`, `@types/node@^26`, `@types/react@^19`, `@types/react-dom@^19` | `npm run typecheck`. |
 | Styling | One plain CSS file | No UI framework. |
@@ -277,29 +277,55 @@ anything StarterKit does not include.
 
 Behavior:
 
-- Each button runs `editor.chain().focus().<command>().run()`, so focus and selection return to
-  the editor. Commands: `undo`, `redo`, `toggleBold`, `toggleItalic`, `toggleUnderline`,
+- `NoteEditor` renders `<Toolbar editor={editor} />` under `TopBar`, only once `useEditor` has
+  returned an editor (the prop is a non-null `Editor`). One `.editor-header` wrapper holds both
+  rows and is the only sticky element.
+- Each button runs `editor.chain().focus().<command>().run()` and cancels `mousedown`, so focus
+  and selection stay in the editor. The select's `onChange` also runs through
+  `editor.chain().focus()` (no `mousedown` cancel on the select, which would stop it opening).
+  Commands: `undo`, `redo`, `toggleBold`, `toggleItalic`, `toggleUnderline`,
   `toggleStrike`, `toggleCode`, `toggleBulletList`, `toggleOrderedList`, `toggleBlockquote`,
-  `toggleCodeBlock`, `setHorizontalRule`, and clear formatting = `unsetAllMarks().clearNodes()`.
-- The block-style select shows the current block: `Heading N` when the cursor is in a heading of
-  level N, otherwise `Normal text`. Choosing `Normal text` runs `setParagraph()`; choosing
-  `Heading N` runs `setHeading({ level: N })`. When the selection is in a code block the select
-  shows `Normal text`.
+  `toggleCodeBlock`, `setHorizontalRule`, and clear formatting =
+  `unsetAllMarks().clearNodes()` plus clearing stored marks (so at a collapsed cursor, where
+  `unsetAllMarks()` does nothing, a pending bold etc. is dropped). Like Tiptap's clear, it removes
+  links and lifts the block out of lists and quotes.
+- The block-style select (`aria-label="Text style"`) shows the current block:
+  `isActive("heading", { level: N })` → `Heading N`; in a code block → a hidden, disabled
+  `Code block` option (so choosing `Normal text` there does fire `onChange` and converts it);
+  otherwise `Normal text`. Choosing `Normal text` runs `setParagraph()`; choosing `Heading N` runs
+  `setHeading({ level: N })`. In a list item, `setHeading` lifts the line out of the list (Tiptap's
+  `setNode` falls back to `clearNodes()`, since list items must start with a paragraph); that is
+  accepted.
 - **Link:** if the cursor or selection is in a link, the button is pressed. Clicking opens
-  `window.prompt("Link URL", currentHref ?? "https://")`. Cancel does nothing; an empty string
-  removes the link (`extendMarkRange("link").unsetLink()`); otherwise
-  `extendMarkRange("link").setLink({ href })`. Tiptap's `setLink` already refuses unsafe URLs
-  (e.g. `javascript:`) via `isAllowedUri`; when it refuses, nothing changes. The button is
-  disabled when the selection is empty and not inside a link (there is no text to link).
-- **State:** toolbar state comes from Tiptap's `useEditorState` selector, so the toolbar
-  re-renders on selection and content changes. Mark, list, quote, and code-block buttons show
+  `window.prompt("Link URL (leave empty to remove)", currentHref ?? "https://")`. The answer is trimmed, and a value with
+  no scheme that doesn't start with `/` or `#` gets `https://` prepended (otherwise `example.com`
+  would be stored as a relative link). Then: cancel, or the untouched default `https://`, does
+  nothing; empty removes the link (`extendMarkRange("link").unsetLink()`); otherwise, if
+  `editor.can()` says `extendMarkRange("link").setLink({ href })` would succeed, it runs. Tiptap's
+  `setLink` refuses unsafe URLs (e.g. `javascript:`) via `isAllowedUri`; checking first means a
+  refusal changes nothing (not even the selection) and shows an alert. The button is disabled when
+  not in a link and either the selection is empty or links aren't allowed there (code blocks).
+  StarterKit is configured with `link: { openOnClick: false }` (the one change from its defaults):
+  with the default, any plain click on a link opens it in a new tab and never places the cursor
+  in it, so links couldn't be edited by mouse. Now a click places the cursor, like Google Docs.
+- **State:** toolbar state comes from one Tiptap `useEditorState` selector that returns only
+  primitives (booleans and the heading level), so the toolbar re-renders on selection and content
+  changes. Mark, list, quote, and code-block buttons show
   pressed state (`aria-pressed`) from `editor.isActive(...)`. Undo, Redo, and each mark/list/block
   button are disabled when `editor.can()` says the command can't run (e.g. Undo with no history).
-- **Dirty tracking** needs no change: toolbar commands change the document, which fires
-  `onUpdate`, which enables Save.
-- **Accessibility:** the row is `role="toolbar"` with `aria-label="Formatting"`. Every button
-  has an `aria-label` and a `title` tooltip that includes its shortcut, e.g. "Bold (Ctrl+B)",
-  showing `⌘` instead of `Ctrl` on macOS.
+- **Dirty tracking** needs no change: toolbar commands that change the document fire `onUpdate`,
+  which enables Save.
+- **Accessibility:** the row is `role="group"` with `aria-label="Formatting"`, not
+  `role="toolbar"`, because every control is a plain tab stop (no arrow-key roving tabindex).
+  Every button is `type="button"` with an `aria-label` and a `title` tooltip that includes its
+  shortcut when it has one, e.g. "Bold (Ctrl+B)"; on macOS `Ctrl` shows as `⌘` and `Alt` as `⌥`.
+  Buttons with a shortcut also set `aria-keyshortcuts` (e.g. `Control+B`, `Meta+B` on macOS).
+  Known trade-off: the select refocuses the editor on every `change`, and on Windows/Linux arrow
+  keys on a closed select fire `change`, so keyboard users open it first (Alt+↓) and pick with
+  Enter.
+  Icons (lucide-react): `Undo2`, `Redo2`, `Bold`, `Italic`, `Underline`, `Strikethrough`, `Code`,
+  `Link` (imported as `LinkIcon`), `List`, `ListOrdered`, `Quote`, `SquareCode`, `Minus`,
+  `RemoveFormatting`.
 - **Look:** Google Docs–like. Icon buttons (lucide icons, 18px) in a light gray rounded bar.
   Hover is a slightly darker gray; pressed is light blue (`#d3e3fd`) with a blue icon
   (`#0b57d0`); disabled is faded. On narrow screens the row scrolls horizontally rather than
