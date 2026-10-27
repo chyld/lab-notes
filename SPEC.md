@@ -47,7 +47,8 @@ deleting unused images.
 | Editor | `@tiptap/react@^3`, `@tiptap/pm@^3`, `@tiptap/starter-kit@^3` | StarterKit defaults, except `link.openOnClick: false` (see Toolbar). |
 | Routing | `react-router@^8`, declarative mode (`BrowserRouter`, `Routes`, `Route`) | One layout route (sidebar) with `/`, `/notes/:id`, and a catch-all "Page not found". |
 | Types | `typescript@^7`, `@types/node@^26`, `@types/react@^19`, `@types/react-dom@^19` | `npm run typecheck`. |
-| Styling | One plain CSS file | No UI framework. |
+| Styling | One plain CSS file, built on CSS custom properties (see [Look](#look)) | No UI framework. |
+| UI font | `@fontsource-variable/inter@^5` (devDependency; bundled by Vite, served by the app) | Inter for the interface and the editor's default text; works offline, no request to Google. |
 | Icons | `lucide-react@^1` (devDependency; tree-shaken into the bundle) | Toolbar icons. |
 | Fonts | `@tiptap/extension-text-style@^3` (`TextStyle`, `FontFamily`, `FontSize`); Google Fonts CSS API | Font family and size. |
 | Highlight | `@tiptap/extension-highlight@^3` (`multicolor: true`) | Highlighter colors. |
@@ -910,9 +911,61 @@ in the document JSON.
 ## Branding
 
 The app is **Lab Notes**: browser tab title and the top bar's brand link to `/`.
-`web/public/logo.svg` is a blue (`#0b57d0`) document with a light-blue (`#8ab4f8`) folded corner
-and a white lab flask with light-blue liquid. It is the favicon and the 22px logo in the top bar's
-brand link.
+`web/public/logo.svg` is a document filled with the brand gradient (indigo `#6366f1` → violet
+`#a855f7` → pink `#ec4899`, top-left to bottom-right), a translucent white folded corner, and a
+white lab flask with violet (`#c084fc`) liquid. It is the favicon, the 24px logo in the top bar's
+brand link, and the 56px logo on `/`. `apple-touch-icon.png` is it at 140px centered on a 180px
+white square (`rsvg-convert` + ImageMagick).
+
+## Look
+
+A UI refresh by user request: "modern and colorful, but also elegant and sleek and maybe
+minimalistic", with a nicer nav bar. `styles.css` defines the tokens once, on `:root`, and every
+rule uses them; where other sections of this spec name older colors (Google blue `#0b57d0`,
+`#d3e3fd`, `#5f6368`, …) the token in the same role applies.
+
+| Token | Value | Role |
+|---|---|---|
+| `--ink` / `--ink-2` / `--muted` | `#16161d` / `#45455a` / `#6b6b80` | text, secondary text, hints (≥ 4.8:1 on white and the canvas) |
+| `--canvas` / `--surface` / `--hover` | `#f6f6fb` / `#fff` / `#f3f2f9` | app background and sidebar, cards and the editor, hover fill |
+| `--line` / `--line-strong` | `#e8e8f0` / `#d6d6e2` | borders, dividers |
+| `--accent` / `--accent-ink` | `#6d4aff` / `#4f2fd6` | the one accent: focus, pressed, links, Save with changes |
+| `--accent-soft` / `--accent-softer` | `#efeaff` / `#f7f5ff` | pressed and selected fills, inline code |
+| `--gradient` | `#6366f1 → #a855f7 → #ec4899` | decoration only: the 3px line along the top edge, the open note's left bar |
+| `--gradient-strong` | `#4f46e5 → #7c3aed → #c026d3` | behind white text (New note): every stop keeps white ≥ 4.5:1 |
+| radii / shadows / focus | 12px, 8px; soft layered shadows; `0 0 0 3px` accent at 28% | |
+
+- **Type:** Inter (variable, bundled) everywhere, including the editor's default text; headings
+  700 with tight tracking; tabular numbers for the font size and line numbers.
+- **Nav bar** (the top bar): frosted white (`backdrop-filter: blur`), a 3px gradient line along
+  the very top of the window, the gradient logo and "Lab Notes" in semibold, then on a note a
+  breadcrumb: a light `/` and the open note's title (`--ink-2`, truncated with an ellipsis, full
+  title on hover). The title is live: `liveTitle(editor)` (`editor.ts`) applies the same title
+  rule as the server to the editor's document on every change, so it follows the first line as
+  you type ("Untitled" when blank). Status screens and `/` show no breadcrumb.
+- **Toolbar:** a floating white bar (rounded 12px, border, soft shadow) under the top bar, inside
+  the same frosted header. 28px icon buttons with 8px corners, `--ink-2` icons, `--hover` on hover,
+  `--accent-soft`/`--accent-ink` when pressed, faded when disabled. Save (`.tool-save`) is in the
+  accent color while there's something to save. Spacing is tight enough that the whole bar fits
+  beside the sidebar on a 1280px window.
+- **Sidebar:** the canvas color with a hairline border; "NOTES" as a small uppercase label; New
+  note as a full-width gradient button with a soft violet glow (lifts 1px on hover); the search
+  box as a white field that gets an accent ring on focus. Notes are rounded rows; hover fills
+  `--hover`; the open note is a white card with a soft shadow, a gradient bar on its left edge,
+  and its title in `--accent-ink`.
+- **Tags:** every tag gets one of 8 soft colors, the same everywhere and every time: `tagHue(tag)`
+  (`tags.ts`) hashes the name to `data-hue` 0–7, and CSS maps each to a background and ink
+  (violet, blue, cyan, green, amber, orange, pink, rose; every ink ≥ 5.2:1 on its background). A
+  sidebar chip whose `#tag` is in the search is filled with its ink color, white text.
+- **Editor content:** links in `--accent-ink` with a soft underline; quotes with a light violet
+  left border; inline code on `--accent-softer` in `--accent-ink`; code blocks dark (`#17161f`
+  background, `#e7e5f4` text, 12px corners); images with slightly rounded corners and round accent
+  resize handles; the caret in the accent color.
+- **Popovers** (fonts, highlight): white, 14px corners, a large soft shadow; the font search is a
+  filled field; category chips are pills.
+- **`/` (no note open):** the 56px logo with a soft violet glow and the "Pick a note, or create a
+  new one." message, centered.
+- No dark mode (not requested).
 
 ## Configuration
 
