@@ -1350,9 +1350,10 @@ button.tag-chip:hover {
     display: none;
   }
 
-  /* The last line scrolls clear of the bar. */
+  /* The last line scrolls clear of the bar, and of iOS's keyboard under it (the page doesn't get
+     shorter when it opens, so the room has to be here). */
   .page-wrap {
-    padding-bottom: var(--toolbar-height);
+    padding-bottom: calc(var(--toolbar-height) + var(--keyboard-inset, 0px) + 12px);
   }
 
   .page .ProseMirror {
@@ -1390,10 +1391,14 @@ button.tag-chip:hover {
     left: max(8px, env(safe-area-inset-left));
     width: auto;
     /* Between the bars; when that's very little (landscape, keyboard up) it may cover the top
-       bar, and the whole sheet scrolls rather than squeezing the list to nothing. */
-    max-height: max(
-      220px,
-      calc(var(--viewport-height, 100dvh) - 52px - env(safe-area-inset-top) - var(--toolbar-height) - 24px)
+       bar (never past the top of the screen), and the whole sheet scrolls rather than squeezing
+       the list to nothing. */
+    max-height: min(
+      max(
+        220px,
+        calc(var(--viewport-height, 100dvh) - 52px - env(safe-area-inset-top) - var(--toolbar-height) - 24px)
+      ),
+      calc(var(--viewport-height, 100dvh) - var(--toolbar-height) - 16px)
     );
     overflow-y: auto;
   }

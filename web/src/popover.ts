@@ -26,29 +26,33 @@ export function usePopoverPlacement(anchor: HTMLElement, width: number): Placeme
 }
 
 /**
- * Close on a click outside (the button toggles itself), the window's width changing, or (when
- * anchored under its button) an element scrolling outside the popover: the toolbar scrolling
- * sideways would leave the fixed popover behind. Page scrolls are fine: the header is sticky, so
- * the button doesn't move. A height change alone (an on-screen keyboard opening or closing)
- * closes an anchored popover only if it no longer fits, and never a sheet. Returns the popover's
- * onBlur, which closes it when keyboard focus moves somewhere outside (e.g. Tab past its last
- * control); focus going nowhere (iOS's keyboard "Done") doesn't.
- */
-/**
- * A tap on a popover's or the toolbar's background (padding, gaps, dividers) keeps focus where it
- * is: on iOS it would otherwise blur the editor and close the keyboard. Fields still take focus.
+ * On a touch screen, a tap on a popover's or the toolbar's background (padding, gaps, dividers)
+ * keeps focus where it is: on iOS it would otherwise blur the editor and close the keyboard.
+ * Fields still take focus. A mouse is left alone.
  */
 export function keepFocus(event: MouseEvent) {
+  if (!matches(TOUCH)) return;
   if (!(event.target instanceof Element) || !event.target.closest("input, select, textarea")) {
     event.preventDefault();
   }
 }
 
+/**
+ * Close on a click outside (the button toggles itself), the window's width changing, or (when
+ * anchored under its button) an element scrolling outside the popover: the toolbar scrolling
+ * sideways would leave the fixed popover behind. Page scrolls are fine: the header is sticky, so
+ * the button doesn't move. A height change alone (an on-screen keyboard opening or closing)
+ * closes an anchored popover only if it no longer fits, and never a sheet. Returns the popover's
+ * onBlur, which closes it when focus leaves it (e.g. Tab past its last control, or the window
+ * losing focus); on a touch screen or a sheet, only when focus moves somewhere else, not when it
+ * goes nowhere (iOS's keyboard "Done"). On a touch screen focus usually stays in the editor, so Esc
+ * (a hardware keyboard) closes it from anywhere.
+ */
 export function useDismiss(
   popoverRef: RefObject<HTMLElement | null>,
   anchor: HTMLElement,
   onClose: () => void,
-  sheet = false,
+  { sheet, touch }: { sheet: boolean; touch: boolean },
 ) {
   useEffect(() => {
     const outside = (target: EventTarget | null) =>
@@ -61,18 +65,24 @@ export function useDismiss(
       if (window.innerWidth !== width || offScreen) onClose();
       width = window.innerWidth;
     };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !popoverRef.current?.contains(event.target as Node)) onClose();
+    };
     window.addEventListener("pointerdown", onPointerDown);
     if (!sheet) window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onResize);
+    if (touch) document.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onResize);
+      document.removeEventListener("keydown", onKeyDown);
     };
-  }, [popoverRef, anchor, onClose, sheet]);
+  }, [popoverRef, anchor, onClose, sheet, touch]);
 
   return (event: FocusEvent) => {
     const next = event.relatedTarget as Node | null;
-    if (next && !popoverRef.current?.contains(next) && !anchor.contains(next)) onClose();
+    if (!next && (sheet || touch)) return;
+    if (!popoverRef.current?.contains(next) && !anchor.contains(next)) onClose();
   };
 }

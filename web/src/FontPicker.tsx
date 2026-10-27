@@ -89,7 +89,11 @@ export function FontPicker({ editor, current, disabled }: Props & { disabled: bo
         aria-expanded={open}
         disabled={disabled}
         onMouseDown={(event) => event.preventDefault()} // the editor keeps focus (and a phone's keyboard)
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          // Closing from the button: the popover's focused control goes away, so back to the text.
+          if (open) editor.commands.focus();
+          setOpen(!open);
+        }}
       >
         <span className="font-button-name">{current ?? "Default"}</span>
         <ChevronDown size={14} aria-hidden />
@@ -124,7 +128,7 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const { sheet, style, touch } = usePopoverPlacement(anchor, POPOVER_WIDTH);
-  const onBlur = useDismiss(popoverRef, anchor, onClose, sheet);
+  const onBlur = useDismiss(popoverRef, anchor, onClose, { sheet, touch });
 
   useEffect(() => {
     let alive = true;

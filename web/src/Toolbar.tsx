@@ -139,9 +139,10 @@ export function Toolbar({ editor, canSave, saving, onSave, lineNumbers, onToggle
   }
 
   return (
-    <div className="toolbar-row">
+    // The whole bar, including the strip below the buttons on phones, keeps the editor focused.
+    <div className="toolbar-row" onMouseDown={keepFocus}>
       {/* role="group", not "toolbar": every control is a plain tab stop (no arrow-key roving). */}
-      <div className="toolbar" role="group" aria-label="Formatting" onMouseDown={keepFocus}>
+      <div className="toolbar" role="group" aria-label="Formatting">
         {/* Save (disk icon, user request) leads the bar. Like the other buttons it keeps focus in
             the editor; a tag typed but not yet added is saved too (NoteEditor's save adds it). */}
         <Tool

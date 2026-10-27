@@ -591,9 +591,10 @@ unreachable. The UI shows the first family in the stack without quotes.
   is still loading, and when the search matches nothing). Esc anywhere in the popover closes it and
   returns focus to the editor; Enter on a category chip just toggles the chip. Clicking a row
   applies it. Rows and chips cancel `mousedown`, so focus stays in the search box. Clicking outside
-  the popover, focus moving somewhere outside it (e.g. Tab past the list; focus going nowhere, like
-  iOS's keyboard "Done", doesn't), the window's width changing, its height changing so the popover
-  no longer fits (an on-screen keyboard opening otherwise doesn't close it), or an element outside
+  the popover, focus leaving it (e.g. Tab past the list; on a touch screen or a phone sheet only
+  when focus moves somewhere else, not when it goes nowhere like iOS's keyboard "Done"), the
+  window's width changing, its height changing so the popover no longer fits (an on-screen
+  keyboard opening otherwise doesn't close it), or an element outside
   it scrolling (the toolbar scrolls sideways; page scrolls are ignored since the header is sticky)
   closes it. If the catalog chunk fails to load, the popover says so and the next open retries.
 - Rows are memoized, so moving the highlight (or starring a font) re-renders a couple of rows, not
@@ -803,9 +804,11 @@ image, typing replaces it (undoable). Touch works the same way (tap to select, d
 the library tracks a touch drag but never listens for its end, so our node view listens for a
 handle's `touchstart` (capture phase on its container, since the handle stops the event) and adds
 one-time `touchend`/`touchcancel` listeners on `document` that end the drag like `mouseup` (the
-library's `handleMouseUp`), then remove themselves and the library's leftover `touchmove`. A drag
-that changed the size stores it (one undo step); a tap that didn't, or a `touchcancel` (which puts
-the size back first), ends the drag without storing anything. Handles have `touch-action: none`;
+library's `handleMouseUp`), then remove themselves and the library's leftover `touchmove`. Only the
+finger that grabbed the handle ends it (another finger lifting doesn't). A drag that changed the
+size stores it (one undo step); a tap that didn't, or a `touchcancel` (which puts the size back
+first), ends the drag without storing anything. The node view's `destroy` removes these listeners
+too (an image going away mid-drag). Handles have `touch-action: none`;
 the library's `touchstart` `preventDefault` keeps the page from scrolling during the drag.
 
 The library ships no handle styling and sets inline pixel `width` *and* `height`, so `styles.css`
@@ -1119,14 +1122,17 @@ keyboard, and the notes list as a slide-out drawer. The desktop layout doesn't c
   icons), selects and the font button 40px tall.
 - **Keeping the keyboard up:** toolbar buttons keep cancelling `mousedown` (on Android, the tap's
   compatibility `mousedown`), so the editor keeps focus while formatting. So do the font and
-  highlight buttons, and a tap on the toolbar's or a popover's background (gaps, padding,
+  highlight buttons (closing a popover from its button returns focus to the editor, since the
+  popover's focused control goes away), and, on a touch screen, a tap on the toolbar's (the whole
+  bar, including the strip under the buttons) or a popover's background (gaps, padding,
   dividers): on iOS that would otherwise blur the editor and close the keyboard (`keepFocus` in
-  `popover.ts`: everything but `input`, `select`, `textarea`). The text-style `select` and the
+  `popover.ts`: everything but `input`, `select`, `textarea`; a mouse is left alone). The text-style `select` and the
   font-size field do take focus (the native picker, the number keyboard); after a change, focus
   returns to the editor as before, though iOS may leave the keyboard closed until the next tap in
   the text. Accepted.
-- **Room for the bar:** the page gets bottom padding of `--toolbar-height`, so the last line
-  scrolls clear of the bar. While typing, the caret is kept between the bars: in the compact layout
+- **Room for the bar:** the page gets bottom padding of `--toolbar-height + --keyboard-inset +
+  12px`, so the last line scrolls clear of the bar, and of iOS's keyboard under it (the page
+  doesn't get shorter when it opens, so the room has to be in the page). While typing, the caret is kept between the bars: in the compact layout
   the editor's `handleScrollToSelection` prop (set with `editor.view.setProps`, which merges, when
   the layout changes; `undefined` in the wide layout hands scrolling back to ProseMirror) measures
   the top bar's bottom and the toolbar's top on screen and `window.scrollBy`s the caret
@@ -1139,8 +1145,9 @@ keyboard, and the notes list as a slide-out drawer. The desktop layout doesn't c
   (or the safe-area inset) on each side, `bottom: calc(var(--keyboard-inset) + var(--toolbar-height)
   + 8px)`, `z-index: 25`, and at most the room between the bars (`--viewport-height` minus the top
   bar and `--toolbar-height`, minus 24px), but never less than 220px: when there's less room
-  (landscape with the keyboard up) it may cover the top bar, and the whole sheet scrolls rather
-  than squeezing the font list below three rows. A sheet isn't anchored to its button, so the
+  (landscape with the keyboard up) it may cover the top bar, though never reach past the top of
+  the visible area (`--viewport-height − --toolbar-height − 16px` caps it), and the whole sheet
+  scrolls rather than squeezing the font list below three rows. A sheet isn't anchored to its button, so the
   toolbar scrolling sideways and height-only resizes don't close it; a tap outside, Esc, choosing,
   and a width change still do. Sizes: font rows 44px tall, category chips 32px, the search box
   44px, stars a 40px target, swatches 36px, "None" 44px.
@@ -1148,13 +1155,15 @@ keyboard, and the notes list as a slide-out drawer. The desktop layout doesn't c
   popover doesn't move focus into it (no autofocus on the font search or a swatch): the editor
   keeps focus, so the keyboard doesn't jump closed and open again, and the font list isn't covered
   by a keyboard nobody asked for. Tapping the font search box focuses it to type. Choosing a font
-  or color returns focus to the editor as before.
+  or color returns focus to the editor as before. Since focus stays in the editor, Esc from a
+  hardware keyboard closes the popover from anywhere. (Its ↑/↓/Enter work once the search box has
+  focus.)
 - **Notes drawer (compact):** the sidebar overlay (as before) is `min(320px, 86vw)` wide, padded by
   the safe-area insets, and spans the visible area (`top: var(--viewport-top)`, `height:
   var(--viewport-height, 100dvh)`), so iOS's keyboard (while searching) doesn't cover the end of
   the list. Hide notes is 40×40; New note and the search box are 44px tall; note rows at least
   52px; tag chips 28px tall. It opens each time you arrive at `/` (see [Notes
-  sidebar](#notes-sidebar)).
+  sidebar](#notes-sidebar)); rotating the phone or resizing on `/` leaves it as it is.
 - **No zooming into fields:** iOS zooms the page when a field under 16px gets focus, so in the
   compact layout every input and select is at least 16px: the notes search, the tag input, the
   font search, the font size, and the text-style select.
@@ -1168,8 +1177,8 @@ keyboard, and the notes list as a slide-out drawer. The desktop layout doesn't c
   screens the handles are 20px with a 40px target.
 - Nothing here changes the wide layout: every rule is inside the compact media query, except the
   viewport meta, `--keyboard-inset` and friends (0 on desktop), the image touch fix and touch
-  handle size, keeping focus on toolbar/popover background clicks, the popover dismissal rules,
-  and the touch-only focus rule.
+  handle size, the font and highlight buttons keeping the editor focused (and refocusing it when
+  they close their popover), the popover height-resize rule, and the touch-only rules.
 
 ## Branding
 

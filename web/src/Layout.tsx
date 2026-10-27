@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useParams } from "react-router";
 import { useViewportInsets } from "./media.ts";
 import { Sidebar, SidebarProvider, useSidebarState } from "./Sidebar.tsx";
@@ -17,11 +17,15 @@ export function Layout() {
   const value = useMemo(() => ({ ...sidebar, notesChanged }), [sidebar, notesChanged]);
   useViewportInsets();
 
-  // On a phone, "/" has nothing to show but the notes, so arriving there opens the drawer.
+  // On a phone, "/" has nothing to show but the notes, so arriving there opens the drawer. Only
+  // arriving: rotating the phone on "/" leaves a closed drawer closed.
   const home = id === null;
   const { narrow, setOpen } = sidebar;
+  const wasHome = useRef(false);
   useEffect(() => {
-    if (home && narrow) setOpen(true);
+    const arrived = home && !wasHome.current;
+    wasHome.current = home;
+    if (arrived && narrow) setOpen(true);
   }, [home, narrow, setOpen]);
 
   return (

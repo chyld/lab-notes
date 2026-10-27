@@ -26,7 +26,11 @@ export function HighlightPicker({ editor, current, disabled }: Props & { disable
         aria-expanded={open}
         disabled={disabled}
         onMouseDown={(event) => event.preventDefault()} // the editor keeps focus (and a phone's keyboard)
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          // Closing from the button: the popover's focused control goes away, so back to the text.
+          if (open) editor.commands.focus();
+          setOpen(!open);
+        }}
       >
         <Highlighter size={18} aria-hidden />
         {/* backgroundColor, not background: a pasted color can't smuggle in a url(). */}
@@ -44,7 +48,7 @@ type PopoverProps = Props & { anchor: HTMLElement; onClose: () => void };
 function HighlightPopover({ editor, current, anchor, onClose }: PopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const { sheet, style, touch } = usePopoverPlacement(anchor, POPOVER_WIDTH);
-  const onBlur = useDismiss(popoverRef, anchor, onClose, sheet);
+  const onBlur = useDismiss(popoverRef, anchor, onClose, { sheet, touch });
   // Focus starts on the current color, or the first.
   const focusIndex = Math.max(0, HIGHLIGHTS.findIndex((h) => h.color === current));
 

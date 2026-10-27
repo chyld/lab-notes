@@ -40,33 +40,46 @@ const ResizableImage = Image.extend({
         handleTouchMove: (event: TouchEvent) => void;
         onCommit: (width: number, height: number) => void;
       };
-      view.dom.addEventListener(
-        "touchstart",
-        (event) => {
-          if (!(event.target instanceof Element) || !event.target.closest("[data-resize-handle]")) return;
-          const { element } = view;
-          const start = { width: element.style.width, height: element.style.height, size: element.offsetWidth };
-          const end = (event: TouchEvent) => {
-            document.removeEventListener("touchend", end);
-            document.removeEventListener("touchcancel", end);
-            document.removeEventListener("touchmove", internals.handleTouchMove); // the library leaves it
-            const cancelled = event.type === "touchcancel";
-            if (cancelled) Object.assign(element.style, { width: start.width, height: start.height });
-            // A tap that didn't resize (or a cancelled drag) ends the drag without storing a size.
-            if (cancelled || element.offsetWidth === start.size) {
-              const commit = internals.onCommit;
-              internals.onCommit = () => {};
-              internals.handleMouseUp();
-              internals.onCommit = commit;
-            } else {
-              internals.handleMouseUp(); // stores the new size: one undo step
-            }
-          };
-          document.addEventListener("touchend", end);
-          document.addEventListener("touchcancel", end);
-        },
-        true, // before the handle's own listener, which stops the event there
-      );
+      let stopListening = () => {};
+      const onTouchStart = (event: TouchEvent) => {
+        if (!(event.target instanceof Element) || !event.target.closest("[data-resize-handle]")) return;
+        stopListening();
+        const { element } = view;
+        const start = { width: element.style.width, height: element.style.height, size: element.offsetWidth };
+        const finger = event.changedTouches[0]?.identifier;
+        stopListening = () => {
+          document.removeEventListener("touchend", end);
+          document.removeEventListener("touchcancel", end);
+          document.removeEventListener("touchmove", internals.handleTouchMove); // the library leaves it
+          stopListening = () => {};
+        };
+        const end = (event: TouchEvent) => {
+          // Another finger lifting isn't the end of this drag.
+          if (![...event.changedTouches].some((touch) => touch.identifier === finger)) return;
+          stopListening();
+          const cancelled = event.type === "touchcancel";
+          if (cancelled) Object.assign(element.style, { width: start.width, height: start.height });
+          // A tap that didn't resize (or a cancelled drag) ends the drag without storing a size.
+          if (cancelled || element.offsetWidth === start.size) {
+            const commit = internals.onCommit;
+            internals.onCommit = () => {};
+            internals.handleMouseUp();
+            internals.onCommit = commit;
+          } else {
+            internals.handleMouseUp(); // stores the new size: one undo step
+          }
+        };
+        document.addEventListener("touchend", end);
+        document.addEventListener("touchcancel", end);
+      };
+      // Capture: before the handle's own listener, which stops the event there.
+      view.dom.addEventListener("touchstart", onTouchStart, true);
+      const destroy = view.destroy.bind(view);
+      view.destroy = () => {
+        view.dom.removeEventListener("touchstart", onTouchStart, true);
+        stopListening(); // the image went away mid-drag
+        destroy();
+      };
       const update = view.update.bind(view);
       view.update = (node, decorations, innerDecorations) => {
         if (!update(node, decorations, innerDecorations)) return false;
