@@ -1,6 +1,6 @@
 import { useRef, type KeyboardEvent } from "react";
 import { X } from "lucide-react";
-import { normalizeTag } from "./tags.ts";
+import { normalizeTag, tagHue } from "./tags.ts";
 
 type Props = {
   tags: string[];
@@ -42,7 +42,7 @@ export function TagEditor({ tags, draft, onDraftChange, onAdd, onRemove }: Props
   return (
     <div className="tag-row" role="group" aria-label="Tags">
       {tags.map((tag) => (
-        <span key={tag} className="tag-chip">
+        <span key={tag} className="tag-chip" data-hue={tagHue(tag)}>
           #{tag}
           <button
             type="button"

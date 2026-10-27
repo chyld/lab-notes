@@ -33,8 +33,9 @@ export function NoNoteOpen() {
   return (
     <>
       <TopBar />
-      <main className="status">
-        <p className="muted">Pick a note, or create a new one.</p>
+      <main className="empty-state">
+        <img src="/logo.svg" alt="" width={56} height={56} />
+        <p>Pick a note, or create a new one.</p>
       </main>
     </>
   );

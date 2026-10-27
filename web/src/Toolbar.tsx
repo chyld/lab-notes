@@ -143,7 +143,7 @@ export function Toolbar({ editor, canSave, saving, onSave, lineNumbers, onToggle
       <div className="toolbar" role="group" aria-label="Formatting">
         {/* Save (disk icon, user request) leads the bar. Like the other buttons it keeps focus in
             the editor; a tag typed but not yet added is saved too (NoteEditor's save adds it). */}
-        <Tool icon={Save} label={saving ? "Saving…" : "Save"} onClick={onSave} disabled={!canSave} />
+        <Tool icon={Save} label={saving ? "Saving…" : "Save"} onClick={onSave} disabled={!canSave} className="tool-save" />
         <Divider />
         <Tool icon={Undo2} label="Undo" keys="Mod+Z" onClick={(k) => chain(k).undo().run()} disabled={!state.canUndo} />
         <Tool icon={Redo2} label="Redo" keys="Mod+Shift+Z" onClick={(k) => chain(k).redo().run()} disabled={!state.canRedo} />

@@ -1,7 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Lab Notes">
-  <path fill="#0b57d0" d="M14 4H40L54 18V56A4 4 0 0 1 50 60H14A4 4 0 0 1 10 56V8A4 4 0 0 1 14 4Z"/>
-  <path fill="#8ab4f8" d="M40 4V14A4 4 0 0 0 44 18H54Z"/>
+  <defs>
+    <linearGradient id="lab-notes-gradient" x1="10" y1="4" x2="54" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="0.55" stop-color="#a855f7"/>
+      <stop offset="1" stop-color="#ec4899"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#lab-notes-gradient)" d="M14 4H40L54 18V56A4 4 0 0 1 50 60H14A4 4 0 0 1 10 56V8A4 4 0 0 1 14 4Z"/>
+  <path fill="#fff" fill-opacity="0.45" d="M40 4V14A4 4 0 0 0 44 18H54Z"/>
   <rect fill="#fff" x="25.5" y="22" width="13" height="3.5" rx="1.75"/>
   <path fill="#fff" d="M28 25V33L19.5 48.5A2.5 2.5 0 0 0 21.7 52H42.3A2.5 2.5 0 0 0 44.5 48.5L36 33V25Z"/>
-  <path fill="#8ab4f8" d="M23.06 42H40.94L44.5 48.5A2.5 2.5 0 0 1 42.3 52H21.7A2.5 2.5 0 0 1 19.5 48.5Z"/>
+  <path fill="#c084fc" d="M23.06 42H40.94L44.5 48.5A2.5 2.5 0 0 1 42.3 52H21.7A2.5 2.5 0 0 1 19.5 48.5Z"/>
 </svg>

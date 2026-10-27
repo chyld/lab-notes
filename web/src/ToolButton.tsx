@@ -32,13 +32,15 @@ type ToolProps = {
   onClick: (fromKeyboard: boolean) => void;
   active?: boolean;
   disabled?: boolean;
+  /** Extra class for styling one button (e.g. the Save icon). */
+  className?: string;
 };
 
-export function Tool({ icon: Icon, label, keys, onClick, active, disabled }: ToolProps) {
+export function Tool({ icon: Icon, label, keys, onClick, active, disabled, className }: ToolProps) {
   return (
     <button
       type="button"
-      className="tool"
+      className={className ? `tool ${className}` : "tool"}
       aria-label={label}
       title={keys ? `${label} (${shortcutLabel(keys)})` : label}
       aria-keyshortcuts={keys ? ariaShortcut(keys) : undefined}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { EditorContent, useEditor } from "@tiptap/react";
+import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import { createNote, errorMessage, updateNote, type Note } from "./api.ts";
-import { extensions, loadDocumentFonts } from "./editor.ts";
+import { extensions, liveTitle, loadDocumentFonts } from "./editor.ts";
 import { LineNumbers, useLineNumbersSetting } from "./LineNumbers.tsx";
 import { TagEditor } from "./TagEditor.tsx";
 import { MAX_TAGS, normalizeTag } from "./tags.ts";
@@ -57,6 +57,8 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
   });
 
   const dirty = version !== savedVersion || tagDraft !== "";
+  // The top bar's breadcrumb follows the first line as it's typed.
+  const title = useEditorState({ editor, selector: ({ editor }) => (editor ? liveTitle(editor) : "") }) ?? "";
 
   // A tag change is an edit like any other: it bumps the same version counter, so Save lights up
   // and a change made during a save stays unsaved.
@@ -113,7 +115,7 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
   return (
     <div className="editor-screen">
       <div className="editor-header">
-        <TopBar>
+        <TopBar title={title}>
           {error && (
             <span className="error" role="alert">
               {error}

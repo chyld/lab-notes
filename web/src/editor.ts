@@ -122,6 +122,36 @@ export function setTextStyle(editor: Editor, chain: ChainedCommands, attrs: Reco
 }
 
 /**
+ * The note's title as the server will compute it (SPEC "Title rule"): the first textblock's text
+ * up to a hard break or newline, whitespace collapsed, else "Untitled". Live, for the top bar.
+ */
+export function liveTitle(editor: Editor): string {
+  let title = "";
+  let found = false;
+  editor.state.doc.descendants((node) => {
+    if (found) return false;
+    if (!node.isTextblock) return true;
+    found = true;
+    let line = "";
+    let ended = false;
+    node.forEach((child) => {
+      if (ended) return;
+      if (child.type.name === "hardBreak") {
+        ended = true;
+      } else if (child.isText) {
+        const text = child.text ?? "";
+        const newline = text.indexOf("\n");
+        line += newline === -1 ? text : text.slice(0, newline);
+        ended = newline !== -1;
+      }
+    });
+    title = line;
+    return false;
+  });
+  return title.replace(/\s+/g, " ").trim() || "Untitled";
+}
+
+/**
  * Link every Google Font the document uses, so its text renders in that font. Only catalog
  * families are requested: fonts pasted in from elsewhere (e.g. "Arial") aren't Google Fonts.
  */

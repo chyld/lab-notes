@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { Link } from "react-router";
 import { PanelLeftClose, PanelLeftOpen, Plus, Search } from "lucide-react";
 import { errorMessage, listNotes, type NoteSummary } from "./api.ts";
-import { normalizeTag } from "./tags.ts";
+import { normalizeTag, tagHue } from "./tags.ts";
 
 const STORAGE_KEY = "lab-notes:sidebar";
 const NARROW = "(max-width: 816px)";
@@ -314,6 +314,7 @@ export function Sidebar({ currentId, refresh }: Props) {
                         key={tag}
                         type="button"
                         className={hasTag(tag) ? "tag-chip active" : "tag-chip"}
+                        data-hue={tagHue(tag)}
                         aria-pressed={hasTag(tag)}
                         title={`Search for #${tag}`}
                         onClick={() => toggleTag(tag)}
