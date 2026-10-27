@@ -329,7 +329,8 @@ instance and saving).
 `NotePage`:
 
 - Top bar: the Show notes button while the [sidebar](#notes-sidebar) is hidden, the "Lab Notes"
-  brand (logo + name) linking to `/`, and the editor's Save button (rendered by `NoteEditor`).
+  brand (logo + name) linking to `/`, and a save error message when there is one (rendered by
+  `NoteEditor`). The Save button itself is the first icon of the [toolbar](#toolbar).
 - Keeps `session = { key, note }` state: `note` is `null` for a new note. It renders
   `<NoteEditor key={session.key} initialNote={session.note} onCreated={...} />` once ready, and
   loading / "Note not found" (with a link back) / error states otherwise.
@@ -362,9 +363,14 @@ deps would destroy and recreate the editor):
   `0`. Dirty = `version !== savedVersion`. A save captures `v = version` when it starts; on
   success it sets `savedVersion = v`, so edits typed during a save stay unsaved. A failed save
   changes nothing.
-- **Save button:** disabled when not dirty or while saving. A `savingRef`, set synchronously at
+- **Save button:** a floppy-disk icon button (lucide `Save`, `aria-label`/`title` "Save") at the
+  start of the toolbar (user request; it used to be a text button in the top bar). `NoteEditor`
+  passes `canSave` (dirty and not saving), `saving`, and `onSave` to `Toolbar`. Disabled when not
+  dirty or while saving. A `savingRef`, set synchronously at
   the start of a save, also guards `save()`, because the `saving` state only disables the button
-  after React re-renders; two clicks in one tick must not both `POST` (duplicate note). Label "Saving…" while in flight. A
+  after React re-renders; two clicks in one tick must not both `POST` (duplicate note). Its label and tooltip read "Saving…" while in flight. Like the other toolbar buttons it cancels
+  `mousedown`, so clicking it keeps focus (and the selection) in the editor; a tag typed in the tag
+  input but not yet added is still saved, because `save()` adds it first. A
   failure shows the `ApiError` message and re-enables Save; the content stays in the editor. Sends
   `editor.getJSON()`.
 - **Leaving mid-save:** a `mountedRef` (set in an effect, cleared on cleanup) guards every
@@ -397,6 +403,7 @@ dividers. `ToolButton.tsx` holds the shared icon button (`Tool`) and divider:
 
 | Group | Controls |
 |---|---|
+| Save | Save (disk icon) |
 | History | Undo, Redo |
 | Block style | A `<select>`: Normal text, Heading 1, Heading 2, Heading 3, Heading 4, Heading 5, Heading 6 |
 | Font | Font picker (see [Fonts and size](#fonts-and-size)) |
@@ -473,7 +480,7 @@ Behavior:
   Enter.
   Icons (lucide-react): `Undo2`, `Redo2`, `Bold`, `Italic`, `Underline`, `Strikethrough`, `Code`,
   `Link` (imported as `LinkIcon`), `List`, `ListOrdered`, `Quote`, `SquareCode`, `Minus`,
-  `RemoveFormatting`, `Highlighter`, `Hash` (line numbers).
+  `RemoveFormatting`, `Highlighter`, `Hash` (line numbers), `Save`.
 - **Look:** Google Docs–like. Icon buttons (lucide icons, 18px) in a light gray rounded bar.
   Hover is a slightly darker gray; pressed is light blue (`#d3e3fd`) with a blue icon
   (`#0b57d0`); disabled is faded. On narrow screens the row scrolls horizontally rather than

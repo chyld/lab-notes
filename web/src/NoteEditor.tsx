@@ -119,11 +119,17 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
               {error}
             </span>
           )}
-          <button type="button" onClick={save} disabled={!editor || !dirty || saving}>
-            {saving ? "Saving…" : "Save"}
-          </button>
         </TopBar>
-        {editor && <Toolbar editor={editor} lineNumbers={lineNumbers} onToggleLineNumbers={toggleLineNumbers} />}
+        {editor && (
+          <Toolbar
+            editor={editor}
+            canSave={dirty && !saving}
+            saving={saving}
+            onSave={save}
+            lineNumbers={lineNumbers}
+            onToggleLineNumbers={toggleLineNumbers}
+          />
+        )}
       </div>
       <main className={lineNumbers ? "page-wrap with-line-numbers" : "page-wrap"}>
         <TagEditor
