@@ -757,9 +757,10 @@ and error states) with a New note button and every note; clicking a note opens i
   light blue background.
 - **Filtering:** while a tag filter is set, only notes with that tag are listed, plus the open note
   whether or not it has the tag (so you always see where you are, e.g. a new untagged note you
-  just saved while filtering). The filter lives in `Layout` state:
-  it survives switching notes, but not a reload. If no note has the tag any more (e.g. it was just
-  removed and saved), the list says "No notes tagged #tag" and the × still clears it.
+  just saved while filtering). The filter is the sidebar's own state (the
+  sidebar never remounts): it survives switching notes, but not a reload. If no note has the tag any more (e.g. it was just
+  removed and saved), the list says "No notes tagged #tag" (`role="status"`), even while the
+  open note is still listed below it, and the × still clears it.
 - **States:** "Loading…" (first load only), "No notes yet", or the error message (first load only;
   a failed refresh keeps the list already shown).
 - **Freshness:** `NoteEditor` gets an `onSaved()` callback, called after every successful save

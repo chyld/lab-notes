@@ -130,6 +130,8 @@ export function Sidebar({ currentId, refresh }: Props) {
   // The open note is always listed, even without the tag, so you can always see where you are
   // (e.g. a new, untagged note you just saved while filtering).
   const shown = filter ? notes.filter((note) => note.tags.includes(filter) || note.id === currentId) : notes;
+  // "No notes tagged #x" is about the tag, so it shows even while the open note is listed anyway.
+  const noneTagged = filter !== null && !notes.some((note) => note.tags.includes(filter));
 
   // The narrow overlay closes on Esc wherever focus is (clicking its empty area drops focus to
   // <body>), like a dialog, and hands focus back to Show notes.
@@ -209,8 +211,10 @@ export function Sidebar({ currentId, refresh }: Props) {
           </p>
         )}
         {state.status === "ready" && notes.length === 0 && <p className="sidebar-status muted">No notes yet</p>}
-        {state.status === "ready" && notes.length > 0 && shown.length === 0 && (
-          <p className="sidebar-status muted">No notes tagged #{filter}</p>
+        {state.status === "ready" && notes.length > 0 && noneTagged && (
+          <p className="sidebar-status muted" role="status">
+            No notes tagged #{filter}
+          </p>
         )}
         {shown.length > 0 && (
           <ul className="sidebar-notes">

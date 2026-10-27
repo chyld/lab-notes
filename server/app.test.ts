@@ -360,11 +360,13 @@ test("migrates a database created before tags", async () => {
     assert.deepEqual(list, [{ id: "old-1", title: "Old note", tags: [] }]);
     const put = await migrated.inject({ method: "PUT", url: "/api/notes/old-1", payload: { content: doc("Old note"), tags: ["kept"] } });
     assert.deepEqual(put.json().tags, ["kept"]);
-  } finally {
     await migrated.close();
+    // Opening the migrated file again (column already there) is a no-op, not a failed ALTER.
+    const reopened = buildApp({ dbPath: path });
+    const again = (await reopened.inject({ method: "GET", url: "/api/notes" })).json();
+    assert.deepEqual(again, [{ id: "old-1", title: "Old note", tags: ["kept"] }]);
+    await reopened.close();
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-  // Opening again (column already there) is a no-op.
-  const again = buildApp({ dbPath: ":memory:" });
-  await again.close();
 });
