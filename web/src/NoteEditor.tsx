@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { createNote, errorMessage, updateNote, type Note } from "./api.ts";
-import { extensions } from "./editor.ts";
+import { extensions, loadDocumentFonts } from "./editor.ts";
 import { Toolbar } from "./Toolbar.tsx";
 import { TopBar } from "./TopBar.tsx";
 
@@ -34,9 +34,11 @@ export function NoteEditor({ initialNote, onCreated }: Props) {
     extensions,
     content: initialNote?.content ?? "",
     autofocus: initialNote ? false : "end",
-    onUpdate: () => {
+    onCreate: ({ editor }) => loadDocumentFonts(editor),
+    onUpdate: ({ editor }) => {
       versionRef.current += 1;
       setVersion(versionRef.current);
+      loadDocumentFonts(editor);
     },
   });
 

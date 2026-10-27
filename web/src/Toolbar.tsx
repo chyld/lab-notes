@@ -1,5 +1,4 @@
-import type { MouseEvent } from "react";
-import { isMacOS, useEditorState, type Editor } from "@tiptap/react";
+import { useEditorState, type Editor } from "@tiptap/react";
 import {
   Bold,
   Code,
@@ -15,29 +14,15 @@ import {
   Strikethrough,
   Underline,
   Undo2,
-  type LucideIcon,
 } from "lucide-react";
+import { FontPicker } from "./FontPicker.tsx";
+import { FontSizeControl, sizeAtSelection } from "./FontSizeControl.tsx";
+import { textStyleAt } from "./editor.ts";
+import { primaryFamily } from "./fonts.ts";
+import { Divider, Tool } from "./ToolButton.tsx";
 
 type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 const HEADING_LEVELS: HeadingLevel[] = [1, 2, 3, 4, 5, 6];
-
-// Tiptap's own check, so labels match how "Mod" is actually bound.
-const IS_MAC = isMacOS();
-
-/** "Mod+Shift+S" → "Ctrl+Shift+S", or "⌘⇧S" on macOS. */
-function shortcutLabel(keys: string): string {
-  if (!IS_MAC) return keys.replace("Mod", "Ctrl");
-  const symbols: Record<string, string> = { Mod: "⌘", Shift: "⇧", Alt: "⌥" };
-  return keys
-    .split("+")
-    .map((key) => symbols[key] ?? key)
-    .join("");
-}
-
-/** The aria-keyshortcuts form, e.g. "Control+Shift+S" or "Meta+B". */
-function ariaShortcut(keys: string): string {
-  return keys.replace("Mod", IS_MAC ? "Meta" : "Control");
-}
 
 /**
  * Bare hosts like "example.com" or "localhost:3000" get https:// (otherwise they'd be stored as
@@ -53,42 +38,6 @@ function normalizeHref(input: string): string {
 
 /** A scheme with nothing after it, like the untouched "https://" default. */
 const isSchemeOnly = (href: string) => /^[a-z][a-z0-9+.-]*:\/*$/i.test(href);
-
-// Keep focus (and the selection) in the editor when a toolbar button is clicked.
-const keepEditorFocus = (event: MouseEvent) => event.preventDefault();
-
-type ToolProps = {
-  icon: LucideIcon;
-  label: string;
-  /** StarterKit's own shortcut, shown in the tooltip; "Mod" becomes Ctrl or ⌘, "Alt" ⌥ on Mac. */
-  keys?: string;
-  /** `fromKeyboard` is true for Enter/Space activation (no pointer), which keeps focus here. */
-  onClick: (fromKeyboard: boolean) => void;
-  active?: boolean;
-  disabled?: boolean;
-};
-
-function Tool({ icon: Icon, label, keys, onClick, active, disabled }: ToolProps) {
-  return (
-    <button
-      type="button"
-      className="tool"
-      aria-label={label}
-      title={keys ? `${label} (${shortcutLabel(keys)})` : label}
-      aria-keyshortcuts={keys ? ariaShortcut(keys) : undefined}
-      aria-pressed={active}
-      disabled={disabled}
-      onMouseDown={keepEditorFocus}
-      onClick={(event) => onClick(event.detail === 0)}
-    >
-      <Icon size={18} aria-hidden />
-    </button>
-  );
-}
-
-function Divider() {
-  return <div className="tool-divider" role="separator" aria-orientation="vertical" />;
-}
 
 export function Toolbar({ editor }: { editor: Editor }) {
   const state = useEditorState({
@@ -119,6 +68,10 @@ export function Toolbar({ editor }: { editor: Editor }) {
       codeBlock: editor.isActive("codeBlock"),
       canCodeBlock: editor.can().toggleCodeBlock(),
       canHorizontalRule: editor.can().setHorizontalRule(),
+      fontFamily: primaryFamily(textStyleAt(editor).fontFamily as string | undefined),
+      canFont: editor.can().setFontFamily("serif"),
+      fontSize: sizeAtSelection(editor),
+      canFontSize: editor.can().setFontSize("12pt"),
     }),
   });
 
@@ -189,6 +142,10 @@ export function Toolbar({ editor }: { editor: Editor }) {
             </option>
           ))}
         </select>
+        <Divider />
+        <FontPicker editor={editor} current={state.fontFamily} disabled={!state.canFont} />
+        <Divider />
+        <FontSizeControl editor={editor} size={state.fontSize} disabled={!state.canFontSize} />
         <Divider />
         <Tool icon={Bold} label="Bold" keys="Mod+B" onClick={(k) => chain(k).toggleBold().run()} active={state.bold} disabled={!state.canBold} />
         <Tool icon={Italic} label="Italic" keys="Mod+I" onClick={(k) => chain(k).toggleItalic().run()} active={state.italic} disabled={!state.canItalic} />
