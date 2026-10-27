@@ -37,9 +37,13 @@ In scope, and nothing else:
     phones: a compact top bar with Save, the formatting toolbar docked at the bottom above the
     on-screen keyboard, the notes list as a slide-out drawer, finger-sized controls, and touch
     image resizing. See [Mobile](#mobile).
+16. **Multiple users** (added by user request): each person signs in with a username and password
+    and has their own private notes, tags, and favorite fonts; accounts are created and managed
+    from the command line. See [Accounts and sign-in](#accounts-and-sign-in).
 
 Out of scope (the user will decide later): delete, autosave, keyboard
-save shortcut, folders, sharing, auth, real-time collaboration,
+save shortcut, folders, sharing (between users too), account screens in the app (sign-up,
+changing your own password, an admin page), deleting accounts, real-time collaboration,
 version history, note previews in the sidebar, text color, an image button or file picker,
 image drag-and-drop from outside the browser, image captions/alignment/cropping/alt text, and
 deleting unused images.
@@ -88,6 +92,9 @@ server/
   images.ts                 # image size limit, accepted content types, type detection
   title.ts                  # extractTitle(doc), extractText(doc) (plain text for search)
   search.ts                 # parseQuery(q), matchesQuery(note, query)
+  auth.ts                   # password hashing, sessions, the cookie, the sign-in rate limit
+  accounts.ts               # createAccount, setPassword, listAccounts (used by users.ts and tests)
+  users.ts                  # the accounts command line: add, passwd, list
   title.test.ts
   app.test.ts
 web/
@@ -177,6 +184,58 @@ CREATE TABLE IF NOT EXISTS favorite_fonts (
 );
 ```
 
+That table is from before accounts; it's now only read once, by the first account (below).
+Favorites are per user:
+
+```sql
+CREATE TABLE IF NOT EXISTS user_favorite_fonts (
+  user_id  TEXT NOT NULL,        -- users.id
+  family   TEXT NOT NULL,
+  added_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, family)
+);
+```
+
+Accounts and sessions (see [Accounts and sign-in](#accounts-and-sign-in)):
+
+```sql
+CREATE TABLE IF NOT EXISTS users (
+  id            TEXT PRIMARY KEY,      -- UUID v4
+  username      TEXT NOT NULL UNIQUE,  -- lowercase, ^[a-z0-9][a-z0-9._-]{0,39}$
+  password_hash TEXT NOT NULL,         -- "scrypt$<N>$<r>$<p>$<salt>$<hash>" (base64)
+  created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash   TEXT PRIMARY KEY,       -- SHA-256 (hex) of the cookie's token; never the token
+  user_id      TEXT NOT NULL,          -- users.id
+  created_at   TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL           -- the session ends 30 days after this
+);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
+CREATE TABLE IF NOT EXISTS image_owners (
+  image_id TEXT NOT NULL,              -- images.id
+  user_id  TEXT NOT NULL,              -- users.id
+  PRIMARY KEY (image_id, user_id)
+);
+```
+
+Images stay stored once per distinct content (deduplicated across users), but each user can only
+fetch the images they uploaded: `image_owners` grants them.
+
+**Owners:** the third migration adds `owner_id TEXT` (`users.id`, nullable) to `notes` if it's
+missing, plus `CREATE INDEX IF NOT EXISTS notes_owner ON notes (owner_id)`. Existing notes start
+with no owner. The **first account** (`users.ts add` while `users` is empty) inherits everything
+saved before accounts existed, in the same `BEGIN IMMEDIATE` transaction as its creation: every
+note with no owner, a grant for every stored image, and the old `favorite_fonts` rows copied into
+`user_favorite_fonts` (keeping `added_at`; the old rows stay, unused, so an older image rolled
+back to still has them). Later
+accounts start empty. Nothing else ever reads a note without an owner.
+
+All migrations run together in one `BEGIN IMMEDIATE` transaction that re-reads `PRAGMA table_info`
+inside it, so the server and the command line starting at the same moment can't both try to add a
+column. `openDb` also sets `PRAGMA busy_timeout = 5000`: the two processes share the file, and a
+write that meets the other's lock waits up to 5 seconds instead of failing at once.
+
 ```sql
 CREATE TABLE IF NOT EXISTS images (
   id         TEXT PRIMARY KEY,   -- SHA-256 of the bytes, lowercase hex
@@ -190,8 +249,8 @@ Images are stored in the same database file, so `notes.db` stays the whole of th
 
 `openDb(path)` creates the parent directory (`mkdirSync(dirname(path), { recursive: true })`)
 unless `path` is `":memory:"`, opens `DatabaseSync`, runs `PRAGMA journal_mode = WAL;`, creates
-the tables, and runs the migrations: `tags` first, then `body`. (`favorite_fonts` is new, so
-`CREATE TABLE IF NOT EXISTS` is all an existing database needs.) The DB file is `$DATA_DIR/notes.db` (`DATA_DIR` defaults to `./data`). WAL mode puts
+the tables, and runs the migrations: `tags` first, then `body`, then `owner_id`. (The other new
+tables need only `CREATE TABLE IF NOT EXISTS`.) The DB file is `$DATA_DIR/notes.db` (`DATA_DIR` defaults to `./data`). WAL mode puts
 `notes.db-wal` and `notes.db-shm` beside it.
 
 ## Title rule
@@ -217,8 +276,38 @@ can overflow the call stack.
 All under `/api`, JSON in and out, except image bytes (below). Note POST/PUT require
 `Content-Type: application/json`.
 
+**Signed in:** every request whose path (query string stripped) starts with `/api/`, except
+exactly `/api/auth/status`, `/api/auth/login`, and `/api/auth/logout`, needs a session (the
+`lab_notes_session` cookie; see [Accounts and sign-in](#accounts-and-sign-in)). A root `onRequest`
+hook, registered before the routes and the image plugin, checks it, so it runs before body
+parsing and validation and also covers unknown `/api` paths (it runs for the not-found handler
+too): signed out, they're `401`; signed in, the usual JSON `404`. Pages and static files never
+need a session (the sign-in page has to load). Without a valid session the answer is `401
+{ error: "You're signed out. Sign in again in another tab, then try again here." }`. (A path
+param over the router's limit is still the router's `414`, before any hook.)
+
+**Same tab, same user:** `api.ts` sends `X-Lab-Notes-User: <username>` (the user the tab signed in
+as) on every request. If it's present and isn't the session's user (someone signed in as
+somebody else in another tab of this browser, so the cookie changed underneath), the request is
+refused with `409 { error: "Someone else signed in on this browser. Reload this page." }` before
+anything is read or written: a stale tab can never save into, or list, the other account. (Image
+`<img>` loads can't send headers; they don't need to.)
+
+**No caching:** every `/api` JSON response is `Cache-Control: no-store` (images keep theirs), so
+the browser's Back button after signing out can't bring back cached notes. Notes and favorite fonts are the signed-in user's own: lists and searches cover only
+their notes, and another user's note id is a `404` exactly like a missing one (its existence
+isn't revealed). This is enforced in SQL, not by checking afterwards: the list and search
+queries have `WHERE owner_id = ?`, reading a note is `WHERE id = ? AND owner_id = ?`, the update
+is a single `UPDATE … WHERE id = ? AND owner_id = ?` (no changes → `404`), a new note's
+`owner_id` is the session's user, and every favorites statement has `user_id = ?`. Images need a
+session too, and each user gets only the images they uploaded (`image_owners`; see Images
+below): knowing or computing an image's id isn't enough.
+
 | Method | Path | Body | Response |
 |---|---|---|---|
+| `GET` | `/api/auth/status` | — | `200` `{ username: string \| null, hasAccounts: boolean }` |
+| `POST` | `/api/auth/login` | `{ username, password }` | `200` `{ username }` + the session cookie; `401`; `429` |
+| `POST` | `/api/auth/logout` | (a form post; any body ignored) | `303` to `/`, the cookie cleared |
 | `GET` | `/api/notes?q=` | — | `200` `[{ id, title, tags, updatedAt }]` (only notes matching `q`, if given; see [Search](#search)), most recently saved first (`updated_at DESC, rowid DESC`: saves in the same millisecond list latest-inserted first) |
 | `POST` | `/api/notes` | `{ content: Doc, tags?: string[] }` | `201` `Note` |
 | `GET` | `/api/notes/:id` | — | `200` `Note`, or `404` |
@@ -250,12 +339,12 @@ keep the list order (most recently saved first). Word searches read every note's
 `parseQuery`, `matchesQuery`), which is plenty fast for a homelab's notes and handles non-ASCII
 case properly (SQLite's `LIKE` only folds ASCII).
 
-**Favorite fonts:** `:family` (URL-encoded; `Open%20Sans`) must be at most 100 characters of
+**Favorite fonts:** per user (`user_favorite_fonts`). `:family` (URL-encoded; `Open%20Sans`) must be at most 100 characters of
 letters and digits in words separated by single spaces (`^[A-Za-z0-9]+( [A-Za-z0-9]+)*$`; every
 Google Fonts family is), else `400`. The router's `maxParamLength` is raised to 300 (it counts the
 still-encoded length, and `%20` is three characters); a param past that is refused by the router
 before validation, `414 { error }` (URI Too Long). At most 200 favorites: a `PUT` of a new one
-past that → `400 { error: "Too many favorite fonts" }`. Both writes are idempotent; re-adding keeps
+past that (per user) → `400 { error: "Too many favorite fonts" }`. Both writes are idempotent; re-adding keeps
 a favorite's place. Listed `ORDER BY added_at, rowid` (rowid breaks a same-millisecond tie). Not
 part of any note; no Save involved.
 
@@ -290,10 +379,16 @@ keeps recursive JSON handling (serializing the reply) from overflowing the stack
   `415 { error: "Unsupported image type" }`; an empty body → `400 { error: "Image is empty" }`.
   SVG is never accepted (it can carry script).
 - The id is the SHA-256 of the bytes; the row is inserted with `INSERT OR IGNORE`, so the same
-  image pasted twice is stored once. Response: `201 { url: "/api/images/<id>" }`.
-- `GET /api/images/:id`: an id that isn't 64 lowercase hex characters, or isn't stored →
-  `404 { error: "Image not found" }`. Otherwise the bytes with `Content-Type` the stored type,
-  `Cache-Control: public, max-age=31536000, immutable` (an id's bytes can never change), and
+  image pasted twice is stored once. The uploader is granted the image (`image_owners`, below),
+  even when the bytes were already stored by someone else. Response: `201 { url:
+  "/api/images/<id>" }`.
+- `GET /api/images/:id`: an id that isn't 64 lowercase hex characters, isn't stored, or isn't
+  granted to the signed-in user → `404 { error: "Image not found" }` (the same for all three, so
+  nobody learns what others stored). Otherwise the bytes with `Content-Type` the stored type,
+  `Cache-Control: private, no-cache` and `ETag: "<id>"`: the browser keeps a copy but asks every
+  time, and an `If-None-Match` that matches gets `304` (after the session and grant checks), so a
+  signed-out browser, or another user on it, can't show an image from cache; `private` keeps
+  shared caches and proxies from storing it. Also
   `X-Content-Type-Options: nosniff`, and `Content-Security-Policy: default-src 'none'; style-src
   'unsafe-inline'; sandbox` (defense in depth if one is opened directly). `HEAD` works too
   (Fastify's automatic HEAD route).
@@ -328,7 +423,7 @@ So `POST /anything` is a JSON 404, never `index.html`, and a missing file such a
 
 ### `api.ts`
 
-Typed helpers: `listNotes(q?)` (`?q=` URL-encoded, omitted when blank), `listFavoriteFonts()`,
+Typed helpers: `authStatus()`, `signIn(username, password)`, `listNotes(q?)` (`?q=` URL-encoded, omitted when blank), `listFavoriteFonts()`,
 `addFavoriteFont(family)`, `removeFavoriteFont(family)`, `getNote(id)`, `createNote(content, tags)`, `updateNote(id, content, tags)`,
 `uploadImage(file)`. The favorite-font writes send no body (so no `Content-Type`) and resolve to
 `void` on `204` (`send` doesn't parse an empty `204`). Note POST/PUT send `Content-Type: application/json`; `uploadImage` sends the
@@ -348,7 +443,8 @@ The original list page is gone (user request). Every screen shares one layout ro
 ```
 
 `Layout` renders the [sidebar](#notes-sidebar) beside an `<Outlet />`, so the sidebar is one
-instance for the whole app: it never remounts when you switch notes or go to `/`.
+instance for the whole app: it never remounts when you switch notes or go to `/`. The router
+only renders once someone is signed in (see [Accounts and sign-in](#accounts-and-sign-in)).
 
 - `/` shows the top bar (Show notes button while the sidebar is hidden, the "Lab Notes" brand) and
   a muted message: "Pick a note, or create a new one." Nothing else.
@@ -609,8 +705,8 @@ unreachable. The UI shows the first family in the stack without quotes.
   text that was selected.
 
 **Favorite fonts** (user request: "a way to save my favorite fonts so that they're easy to
-access"). Kept on the server (`favorite_fonts`, API above), so every device and browser shows the
-same favorites; a preference, not note content, so a star click saves at once (no Save button).
+access"). Kept on the server, per user (`user_favorite_fonts`, API above), so every device and
+browser shows that user's favorites; a preference, not note content, so a star click saves at once (no Save button).
 State and the request queue live in `favoriteFonts.ts`; `FontPicker.tsx` renders them.
 
 - **Loading:** each time the picker opens it fetches `listFavoriteFonts()` (through the queue
@@ -1061,6 +1157,147 @@ to leave it, the app warns first.
   don't allow custom text there).
 - Look: white card, 16px corners, large soft shadow, a blurred translucent backdrop.
 
+### Accounts and sign-in
+
+By user request: "make this multi-user". The user chose: notes private to each user, sign-in with
+a username and password built into the app, and accounts managed only from the command line (no
+sign-up or account screens in the app).
+
+**Passwords** (`server/auth.ts`): `scrypt` from `node:crypto`, the async one (so hashing doesn't
+block the server), with N = 2¹⁵, r = 8, p = 1, a 16-byte random salt, and a 32-byte key, stored as
+`scrypt$32768$8$1$<salt>$<hash>` (base64). `maxmem` is 64 MiB: those parameters need exactly 32
+MiB, which is Node's default limit, and the call fails at the limit. Verifying recomputes with
+the stored parameters and compares with `timingSafeEqual`. A sign-in for a username that doesn't
+exist still runs one scrypt, against a dummy hash made at startup with the same parameters, so
+the response time doesn't tell which usernames exist. Rules: 8 to 1024 characters (code points);
+anything else is allowed (spaces, symbols, any language). Passwords are NFC-normalized when set
+and when checked (so the same password typed on a Mac, which may produce decomposed accents,
+still matches), and otherwise used as typed (no trimming).
+
+**Usernames:** trimmed and lowercased, then `^[a-z0-9][a-z0-9._-]{0,39}$` (so `Chyld` signs in as
+`chyld`). Sign-in applies the same trim and lowercase before looking it up.
+
+**Sessions** (`server/auth.ts`):
+
+- Signing in creates a session: a 32-byte random token (base64url) in the cookie; the database
+  keeps only its SHA-256 (`sessions.token_hash`), so a copy of the database holds no usable
+  sessions. A session cookie the request already carried is deleted first (no session
+  fixation; signing in again doesn't pile up sessions).
+- Cookie `lab_notes_session=<token>; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000` (30 days),
+  plus `Secure` when the request came over HTTPS (`request.protocol`, which honors
+  `X-Forwarded-Proto` only from a trusted proxy; see `TRUST_PROXY` in
+  [Configuration](#configuration)). Over plain `http://` on the LAN a `Secure` cookie would be
+  dropped by the browser, so it isn't set there.
+- Cookies aren't specific to a port: every other web service on the same hostname (another app
+  on the same box at `:8080`) receives this cookie too, and counts as "same site". So give Lab
+  Notes its own hostname (a reverse-proxy subdomain) if other services on that host aren't
+  trusted. Said in the Docker section too.
+- A session is valid until 30 days after its `last_seen_at`. A request on a session last seen
+  over an hour ago updates `last_seen_at` and re-sends the cookie (a sliding 30 days; at most one
+  write per hour per session). An expired session is deleted when it's presented; startup also
+  deletes every expired session.
+- The `Cookie` header is parsed by hand (one cookie, no dependency); a malformed or unknown token
+  is just "no session".
+- CSRF: the cookie is `SameSite=Lax`, so another site's `POST`, `PUT`, or `DELETE` never carries
+  it. Another *origin* on the same site (another port, a sibling subdomain) does get the cookie,
+  but every write is a request a page can't make cross-origin without a CORS preflight, which
+  the server never approves (it sends no CORS headers): `PUT`/`DELETE` always need one, and the
+  `POST`s accept only JSON or image bodies, whose content types need one too. The one exception
+  is sign-out's form post: another origin on the same *site* (which does get the cookie) could
+  sign you out; nothing more. A different site can't even do that (no cookie arrives, so nothing
+  is cleared).
+
+**Sign-in** (`POST /api/auth/login`, JSON `{ username, password }`, both strings, username at most
+100 and password at most 1024 characters, else `400`): a match → a new session, its cookie, and
+`200 { username }`. No match (unknown user or wrong password) → `401 { error: "Wrong username or
+password" }`, the same either way. **Rate limit:** at most 10 sign-in attempts that haven't
+succeeded per client IP (`request.ip`) in any 15 minutes; past that → `429 { error: "Too many
+sign-in attempts. Try again in a few minutes." }` without checking the password. An attempt is
+counted *before* its password check (so 50 parallel requests can't all slip under the limit while
+their checks run) and uncounted if it succeeds (only that one: other failures stay, so succeeding
+on your own account doesn't reset a count you're running up against someone else's). There's no
+per-account limit: it would let anyone lock a user out by failing on purpose. At most 4
+password checks run at once (each needs 32 MiB); more wait their turn. Kept in memory: a map of IP → attempt times, pruned as it's used and capped at 10,000 IPs (the
+least recently used dropped); a restart forgets it. Caveat: behind a reverse proxy without
+`TRUST_PROXY` (and for connections Docker relays itself, e.g. from the host's own `localhost`),
+every client shares the proxy's IP, so one person's 10 failures lock everyone out for a while.
+
+**Sign-out** (`POST /api/auth/logout`): if the request carries the session cookie, deletes that
+session and clears the cookie (the same name, `Path=/`, `HttpOnly`, `SameSite=Lax`, and `Secure`
+rule, with an empty value and `Max-Age=0`, so it replaces the original); either way it answers
+`303 See Other`, `Location: /`. Without the cookie it sends no `Set-Cookie` at all: a cross-site
+form post arrives without the (`Lax`) cookie, and must not be able to clear it either. The route accepts
+`application/x-www-form-urlencoded` (its body ignored, at most 1 KiB; the parser is registered
+only in that route's plugin, so other routes still refuse form bodies), because the app signs out with a real
+form post: the full page load clears every in-memory cache (the favorites cache, the sidebar),
+and a note with unsaved changes gets the browser's own "Leave site?" prompt
+(`beforeunload`) before anything happens.
+
+**Status** (`GET /api/auth/status`): `{ username, hasAccounts }`: the signed-in username or `null`,
+and whether any account exists (so the sign-in page can say how to make the first one).
+
+**The command line** (`server/users.ts`, a thin shell over `server/accounts.ts`, whose
+`createAccount`, `setPassword`, and `listAccounts` take the `Db` and do the work, so tests import
+them without running a command line; `users.ts` runs only when executed directly, `import.meta.main`; in Docker `docker compose exec app node server/users.ts
+…`, in development `npm run users -- …`). It opens `$DATA_DIR/notes.db` with `openDb` (so the
+migrations run), and works while the server is running (SQLite WAL; the server reads accounts
+fresh on every request, so a new account can sign in at once):
+
+- `add <username>`: asks for the password twice and creates the account (`Created chyld.`). The
+  first account inherits the notes saved before accounts existed, so with a terminal it asks
+  first, showing the count: `chyld will be the first account and own the 8 existing notes.
+  Continue? [y/N]` (anything but `y`/`yes` aborts, creating nothing: a typo can't hand them to the
+  wrong name). Piped (no terminal), it goes ahead. Then `Created chyld (8 existing notes).`
+- `passwd <username>`: asks for a new password twice, sets it, and deletes that user's sessions
+  (signed out everywhere).
+- `list`: one line per account: username, created date, number of notes.
+
+Passwords are never command-line arguments (they'd show in `ps` and the shell history). With a
+terminal (`docker compose exec` gives one by default), the prompt doesn't echo what's typed (raw
+mode, restored on every way out: success, an error, a mismatch, Ctrl+C): Enter (`\r` or `\n`) ends it, Backspace removes the last character
+(code point), Ctrl+C aborts (exit 130), Ctrl+D ends it, and pasted text arrives in chunks and is
+taken whole. Without one (stdin piped, e.g. `printf '%s\n' "$PW" | docker compose exec -T app
+node server/users.ts add bob`), the first line of stdin is the password (only a trailing `\r?\n`
+stripped), asked once. Errors (bad or taken username,
+unknown user, password too short or long, the two entries differing, a missing or extra
+argument) print one line to stderr and exit 1; `--help` or no arguments print the usage.
+`package.json` gets `"users": "node server/users.ts"`.
+
+**Web app:**
+
+- `main.tsx` renders `<Auth>` (`Auth.tsx`), which asks `GET /api/auth/status` once. Until it
+  answers: an empty canvas. If it fails (server down, a network error): "Couldn't reach Lab
+  Notes." and a Retry button that asks again. Signed out: the sign-in page. Signed in: the router as before, with
+  the username in a small context (`useUsername()`), and `api.ts` sending it as
+  `X-Lab-Notes-User`. The URL isn't touched, so after signing in you land on the page you asked
+  for (`/notes/<id>` included). A page restored from the browser's back/forward cache
+  (`pageshow` with `persisted`) reloads, so Back after signing out shows the sign-in page, not
+  the old notes.
+- **Sign-in page** (`SignIn.tsx`), centered on the canvas: the 56px logo, "Sign in to Lab Notes",
+  a `<form>` with Username (`autocomplete="username"`, `autocapitalize="none"`,
+  `spellcheck=false`) and Password (`type="password"`, `autocomplete="current-password"`), and a
+  full-width gradient "Sign in" button ("Signing in…" and disabled while waiting). A failure
+  shows the server's message under the button (`role="alert"`) and keeps the username. Inputs
+  are 16px (no zoom on iOS); on phones the card fills the width with 16px margins. If
+  `hasAccounts` is false, the form is replaced by: "No accounts yet. On the server, create one
+  with:" and the command in a code block (`docker compose exec app node server/users.ts add
+  <name>`).
+- **Who's signed in, and Sign out:** a footer pinned to the bottom of the sidebar (`position:
+  sticky; bottom: 0` in its scroll area, the canvas color with a hairline top border, padded by
+  the bottom safe-area inset in the phone drawer): a user icon (lucide `CircleUser`), the
+  username (truncated), and a `<form method="post" action="/api/auth/logout">` holding a
+  `LogOut`-icon button labeled "Sign out" (40×40 in the compact layout).
+- **Signed out mid-session** (the session expired, or `passwd` signed everyone out): requests
+  answer `401` with the message above, shown where that request's errors already show (Save's
+  error in the top bar, the sidebar's or the note's load error). Nothing unmounts the editor, so
+  unsaved work stays on screen: sign in again in another tab (the cookie is shared), then Save.
+  Signing in there as someone *else* makes this tab's requests `409` instead ("Someone else
+  signed in on this browser. Reload this page."), so its work can't land in the wrong account.
+  Reloading shows the sign-in page (with the usual "Leave site?" first if there are changes).
+- Device preferences (sidebar open, line numbers) stay per browser, not per user.
+
+**Sharing** between users is out of scope: nobody can see or link to another user's note.
+
 ### Mobile
 
 By user request: "the sidebar, the navbar, and the editor need to work very well on a mobile
@@ -1245,6 +1482,7 @@ rule uses them; where other sections of this spec name older colors (Google blue
 |---|---|---|
 | `PORT` | `5555` | Port the server listens on (bound to `0.0.0.0`). In dev, the Vite proxy targets it too. |
 | `DATA_DIR` | `./data` | Directory holding `notes.db` |
+| `TRUST_PROXY` | unset | The reverse proxy's own address(es), comma-separated: IPs, CIDR ranges, or `proxy-addr`'s keywords (`loopback`, `linklocal`, `uniquelocal`), e.g. `172.18.0.1` or `10.0.0.0/8`. Passed to Fastify's `trustProxy` as that string: only a connection *from* one of them has its `X-Forwarded-For` (the client IP for the sign-in rate limit) and `X-Forwarded-Proto` (HTTPS, for the cookie's `Secure`) believed; nothing a client sends directly is. (A hop count won't do: this Fastify deliberately ignores the headers for numeric trust, since it can't check who's talking.) Unset or empty: no proxy; the headers are ignored. A value `proxy-addr` can't compile exits at startup with one error line (like `PORT`). Prefer the proxy's exact address over a wide range like `uniquelocal`, which would also trust every LAN client that can reach the port directly; or publish the port only to the proxy (e.g. `127.0.0.1:${PORT}:5555` in `compose.yaml`). |
 
 Empty values count as unset. A `PORT` that is not an integer from 1 to 65535 exits at startup with
 one clear error line.
@@ -1267,6 +1505,13 @@ Under Compose, `PORT` is the **host** port only; the container always listens on
    `USER node`; `EXPOSE 5555`; `CMD ["node", "server/index.ts"]` (exec form, so Node is PID 1 and
    receives signals).
 
+**Accounts** (see [Accounts and sign-in](#accounts-and-sign-in)): `docker compose exec app node
+server/users.ts add <name>` (also `passwd <name>`, `list`). `server/users.ts` ships in the image
+with the rest of `server/`. The session cookie goes to every service on the same hostname
+(cookies ignore ports), so if other services share the host, give Lab Notes its own hostname.
+`buildApp` takes a `trustProxy` option (the address list); `index.ts` reads `TRUST_PROXY`, which
+`compose.yaml` passes through: `environment: { TRUST_PROXY: "${TRUST_PROXY:-}" }`.
+
 **Shutdown:** on `SIGTERM`/`SIGINT`, `index.ts` awaits `app.close()` (whose `onClose` hook closes
 the database), then exits: code 0, or 1 with the error logged if closing failed. Fastify 5's default `forceCloseConnections: "idle"` keeps idle keep-alive
 sockets from delaying this.
@@ -1281,6 +1526,8 @@ services:
     build: .
     ports:
       - "${PORT:-5555}:5555"
+    environment:
+      TRUST_PROXY: "${TRUST_PROXY:-}"
     volumes:
       - data:/data
     restart: unless-stopped
@@ -1371,3 +1618,16 @@ they never touch `./data`.
     the font and highlight popovers open as sheets above the bar without closing the keyboard;
     no field zooms the page on focus; images resize by touch (one undo step, saved); a wide
     desktop window looks and works exactly as before.
+21. Multiple users: with no accounts, the app shows the sign-in page with the command to create
+    one; `users.ts add` creates an account (password asked twice, not echoed) and the first one,
+    after confirming, gets every existing note and favorite font; signing in shows only your notes and favorites;
+    another user's note URL is "Note not found"; wrong credentials say so without revealing
+    whether the username exists, and the 11th failure in 15 minutes from one IP is refused;
+    Sign out (with the browser's prompt first if there are unsaved changes) returns to the
+    sign-in page; `passwd` signs that user out everywhere; an expired session mid-edit keeps
+    the text on screen and Save explains how to sign back in; a tab left open while someone else
+    signs in on the same browser refuses to save or list (409, "Reload this page"); every API
+    route except the three `/api/auth/*` ones answers 401 without a session; `npm test` covers
+    all of this, the migration, and `accounts.ts`. The existing tests run signed in: a helper
+    creates an account in the app's database (`buildApp` exposes it to tests as `app.db`), signs
+    in through the API, and adds the cookie to every request; a second user checks isolation.
