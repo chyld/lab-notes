@@ -9,7 +9,7 @@ const MAX_PT = 400;
 
 /** "18pt" → 18, "24px" → 18; relative units (em, %, …) → null, read from the DOM instead. */
 function toPoints(size: string): number | null {
-  const match = /^\s*([\d.]+)\s*(pt|px)\s*$/i.exec(size);
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(pt|px)\s*$/i.exec(size);
   if (!match) return null;
   const n = Number(match[1]);
   return match[2].toLowerCase() === "px" ? Math.round(n * 0.75) : Math.round(n);
@@ -56,22 +56,29 @@ export function FontSizeControl({ editor, size, disabled }: Props) {
     chain.setFontSize(`${clamped}pt`).run();
   }
 
-  function commit(refocus: boolean) {
-    const typed = draftRef.current;
+  /** The typed size if it's a plain whole number, else null. Clears the draft either way. */
+  function takeTyped(): number | null {
+    const typed = draftRef.current?.trim() ?? null;
     setTyped(null);
-    if (typed === null) return; // nothing typed, or already handled
-    const n = Number(typed.trim());
-    if (typed.trim() !== "" && Number.isFinite(n) && n > 0) apply(n, refocus);
+    return typed !== null && /^\d+$/.test(typed) && Number(typed) > 0 ? Number(typed) : null;
   }
 
-  const current = size ?? 12;
+  function commit(refocus: boolean) {
+    const typed = takeTyped();
+    if (typed !== null) apply(typed, refocus);
+  }
+
+  // −/+ cancel mousedown, so the input doesn't blur first: step from a pending typed size.
+  function step(delta: number, fromKeyboard: boolean) {
+    apply((takeTyped() ?? size ?? 12) + delta, !fromKeyboard);
+  }
 
   return (
     <div className="font-size">
       <Tool
         icon={Minus}
         label="Decrease font size"
-        onClick={(fromKeyboard) => apply(current - 1, !fromKeyboard)}
+        onClick={(fromKeyboard) => step(-1, fromKeyboard)}
         disabled={disabled || size === null || size <= MIN_PT}
       />
       <input
@@ -88,6 +95,7 @@ export function FontSizeControl({ editor, size, disabled }: Props) {
           if (event.key === "Enter") {
             event.preventDefault();
             commit(true);
+            editor.commands.focus(); // also when nothing was typed
           } else if (event.key === "Escape") {
             event.preventDefault();
             setTyped(null);
@@ -98,7 +106,7 @@ export function FontSizeControl({ editor, size, disabled }: Props) {
       <Tool
         icon={Plus}
         label="Increase font size"
-        onClick={(fromKeyboard) => apply(current + 1, !fromKeyboard)}
+        onClick={(fromKeyboard) => step(1, fromKeyboard)}
         disabled={disabled || size === null || size >= MAX_PT}
       />
     </div>

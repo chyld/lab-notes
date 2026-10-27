@@ -52,7 +52,10 @@ export function loadDocumentFonts(editor: Editor) {
     }
   });
   if (used.size === 0) return;
-  void catalogFamilies().then((known) => {
-    for (const family of used) if (known.has(family)) loadFont(family);
-  });
+  catalogFamilies().then(
+    (known) => {
+      for (const family of used) if (known.has(family)) loadFont(family);
+    },
+    () => {}, // catalog unavailable: text falls back to the generic family
+  );
 }

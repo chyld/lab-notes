@@ -21,7 +21,15 @@ let families: Promise<Set<string>> | null = null;
 
 /** The bundled catalog, imported on first use so it stays out of the main bundle. */
 export function loadCatalog(): Promise<CatalogFont[]> {
-  catalog ??= import("./google-fonts.json").then((m) => m.default as CatalogFont[]);
+  catalog ??= import("./google-fonts.json").then(
+    (m) => m.default as CatalogFont[],
+    (err: unknown) => {
+      // Don't cache a failed chunk load (e.g. a stale deploy); the next call retries.
+      catalog = null;
+      families = null;
+      throw err;
+    },
+  );
   return catalog;
 }
 

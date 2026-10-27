@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/react";
 import { ChevronDown } from "lucide-react";
@@ -47,7 +47,7 @@ export function FontPicker({ editor, current, disabled }: Props & { disabled: bo
         className="tool-select font-button"
         aria-label={`Font: ${current ?? "Default"}`}
         title="Font"
-        aria-haspopup="listbox"
+        aria-haspopup="dialog"
         aria-expanded={open}
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
@@ -66,11 +66,13 @@ type PopoverProps = Props & { anchor: HTMLElement; onClose: () => void };
 
 function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
   const [fonts, setFonts] = useState<CatalogFont[] | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<FontCategory | null>(null);
   // Index into rows; row 0 is "Default".
   const [active, setActive] = useState(0);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const [position] = useState(() => {
     const rect = anchor.getBoundingClientRect();
@@ -79,19 +81,23 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
 
   useEffect(() => {
     let alive = true;
-    loadCatalog().then((list) => alive && setFonts(list));
+    loadCatalog().then(
+      (list) => alive && setFonts(list),
+      () => alive && setLoadFailed(true),
+    );
     return () => {
       alive = false;
     };
   }, []);
 
-  // Close on a click outside (the button toggles itself), a resize, or any scroll outside the
-  // popover (e.g. the toolbar scrolling sideways would leave the fixed popover behind).
+  // Close on a click outside (the button toggles itself), a resize, or an element scrolling outside
+  // the popover (the toolbar scrolling sideways would leave the fixed popover behind). Page scrolls
+  // are fine: the header is sticky, so the button doesn't move.
   useEffect(() => {
     const outside = (target: EventTarget | null) =>
       !popoverRef.current?.contains(target as Node) && !anchor.contains(target as Node);
     const onPointerDown = (event: PointerEvent) => outside(event.target) && onClose();
-    const onScroll = (event: Event) => outside(event.target) && onClose();
+    const onScroll = (event: Event) => event.target !== document && outside(event.target) && onClose();
     window.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onClose);
@@ -111,8 +117,13 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
 
   const rows: (CatalogFont | null)[] = [null, ...matches];
 
+  // Scroll the highlight into view only when it moves by keyboard or search, not on hover (hovering
+  // a half-visible row would scroll the list under the pointer).
+  const scrollToActive = useRef(true);
+
   // A search highlights its first match; with no search, the current font (or "Default").
   useEffect(() => {
+    scrollToActive.current = true;
     if (query.trim()) {
       setActive(matches.length > 0 ? 1 : 0);
     } else {
@@ -121,6 +132,8 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
   }, [query, matches, current]);
 
   useEffect(() => {
+    if (!scrollToActive.current) return;
+    scrollToActive.current = false;
     listRef.current?.children[active]?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
@@ -134,22 +147,40 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
     onClose();
   }
 
+  // Stable handlers so memoized rows only re-render when their own props change.
+  const applyRef = useRef(apply);
+  applyRef.current = apply;
+  const pick = useCallback((font: CatalogFont | null) => applyRef.current(font), []);
+
+  // Keyboard focus leaving the popover (e.g. Tab past the chips) closes it.
+  function onBlur(event: FocusEvent) {
+    const next = event.relatedTarget as Node | null;
+    if (!popoverRef.current?.contains(next) && !anchor.contains(next)) onClose();
+  }
+
   function onKeyDown(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      editor.commands.focus();
+      return;
+    }
+    // Arrows and Enter drive the list only from the search box; Enter on a chip toggles the chip.
+    if (event.target !== searchRef.current) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
+      scrollToActive.current = true;
       setActive((i) => Math.min(rows.length - 1, i + 1));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
+      scrollToActive.current = true;
       setActive((i) => Math.max(0, i - 1));
     } else if (event.key === "Enter") {
       if (event.nativeEvent.isComposing) return;
       event.preventDefault();
+      if (fonts === null) return; // catalog still loading: don't apply "Default" by accident
       if (query.trim() && matches.length === 0) return; // nothing to pick
       apply(rows[active] ?? null);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-      editor.commands.focus();
     }
   }
 
@@ -161,8 +192,10 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
       aria-label="Fonts"
       style={{ top: position.top, left: position.left, width: POPOVER_WIDTH }}
       onKeyDown={onKeyDown}
+      onBlur={onBlur}
     >
       <input
+        ref={searchRef}
         className="font-search"
         type="search"
         placeholder="Search Google Fonts"
@@ -190,30 +223,51 @@ function FontPopover({ editor, current, anchor, onClose }: PopoverProps) {
         ))}
       </div>
       <ul id="font-list" ref={listRef} className="font-list" role="listbox" aria-label="Fonts">
-        {rows.map((font, i) => {
-          const family = font?.[0] ?? null;
-          return (
-            <li
-              key={family ?? "default"}
-              id={`font-option-${i}`}
-              role="option"
-              aria-selected={family === current}
-              className={i === active ? "font-option active" : "font-option"}
-              data-family={family ?? undefined}
-              style={font ? { fontFamily: fontStack(font[0], font[1]) } : undefined}
-              ref={font ? observePreview : undefined}
-              onMouseMove={() => setActive(i)}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => apply(font)}
-            >
-              {family ?? "Default"}
-            </li>
-          );
-        })}
-        {fonts === null && <li className="font-empty">Loading fonts…</li>}
+        {rows.map((font, i) => (
+          <FontRow
+            key={font?.[0] ?? "default"}
+            font={font}
+            index={i}
+            active={i === active}
+            selected={(font?.[0] ?? null) === current}
+            onHover={setActive}
+            onPick={pick}
+          />
+        ))}
+        {fonts === null && !loadFailed && <li className="font-empty">Loading fonts…</li>}
+        {loadFailed && <li className="font-empty">Couldn't load the font list. Close and try again.</li>}
         {fonts !== null && matches.length === 0 && <li className="font-empty">No fonts match</li>}
       </ul>
     </div>,
     document.body,
   );
 }
+
+type RowProps = {
+  font: CatalogFont | null;
+  index: number;
+  active: boolean;
+  selected: boolean;
+  onHover: (index: number) => void;
+  onPick: (font: CatalogFont | null) => void;
+};
+
+// Memoized: with ~1,700 rows, only the rows whose active/selected state changed re-render.
+const FontRow = memo(function FontRow({ font, index, active, selected, onHover, onPick }: RowProps) {
+  return (
+    <li
+      id={`font-option-${index}`}
+      role="option"
+      aria-selected={selected}
+      className={active ? "font-option active" : "font-option"}
+      data-family={font?.[0]}
+      style={font ? { fontFamily: fontStack(font[0], font[1]) } : undefined}
+      ref={font ? observePreview : undefined}
+      onMouseMove={() => onHover(index)}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => onPick(font)}
+    >
+      {font?.[0] ?? "Default"}
+    </li>
+  );
+});
