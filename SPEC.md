@@ -426,16 +426,22 @@ unreachable. The UI shows the first family in the stack without quotes.
   it scrolling (the toolbar scrolls sideways; page scrolls are ignored since the header is sticky)
   closes it. If the catalog chunk fails to load, the popover says so and the next open retries.
 - Rows are memoized, so moving the highlight re-renders two rows, not ~1,700.
-- Applying runs `loadFont(family)` and `editor.chain().focus().setFontFamily(stack).run()`, then
-  closes. The editor keeps its selection while the popover has focus, so the font lands on the
+- Applying runs `loadFont(family)` and sets the font via `setTextStyle` (`editor.ts`), then closes.
+  `setTextStyle` exists because, at a collapsed cursor, Tiptap's `setMark` merges in the
+  surrounding text's attributes even after Clear formatting emptied the stored marks (a cleared
+  font would come back on the next size change). At a cursor it sets every textStyle attribute
+  explicitly (from `textStyleAt`, the rest `null`); for a range it uses Tiptap's per-segment merge,
+  so changing the size of text in two fonts keeps both fonts. Font size applies the same way. The editor keeps its selection while the popover has focus, so the font lands on the
   text that was selected.
 
 **Font size** (`FontSizeControl.tsx`), after the font picker, Google Docs–style: a `−` button, a
 small number input, a `+` button. Units are points (`pt`).
 
 - The input shows the size at the selection start: the `textStyle` `fontSize` if set, otherwise
-  the computed CSS font size of the text at the cursor converted to points (px × 0.75, rounded),
-  so headings show their real size (e.g. Heading 1 → 24).
+  the computed CSS font size converted to points (px × 0.75, rounded), so headings show their real
+  size (e.g. Heading 1 → 24). The measured element is the text before a cursor (what typing
+  continues, via `domAtPos(pos, -1)`) or at the start of a range; after Clear formatting (explicit
+  empty stored marks) it is the block, not the old span the cursor still sits in.
 - A stored `fontSize` in `pt` or `px` is converted to points; other units (e.g. `em` from pasted
   HTML) fall back to the computed size. The shown number is rounded for display only.
 - The input (`type="text"`, `inputmode="numeric"`) keeps what the user types as a draft (in a ref,
