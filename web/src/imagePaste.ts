@@ -1,4 +1,5 @@
 import { Extension } from "@tiptap/react";
+import { closeHistory } from "@tiptap/pm/history";
 import type { Fragment, NodeType, Slice } from "@tiptap/pm/model";
 import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from "@tiptap/pm/state";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
@@ -66,7 +67,8 @@ function insertUploaded(view: EditorView, id: object, results: PromiseSettledRes
   const { state } = view;
   const pending = key.getState(state)?.find((p) => p.id === id);
   const tr = state.tr.setMeta(key, { remove: id } satisfies Meta);
-  if (pending && urls.length > 0) {
+  const inserting = pending !== undefined && urls.length > 0;
+  if (inserting) {
     const { from, to } = pending;
     const { image, paragraph } = state.schema.nodes;
     const replace = state.doc.slice(from, to).content.eq(pending.original);
@@ -85,7 +87,13 @@ function insertUploaded(view: EditorView, id: object, results: PromiseSettledRes
       tr.setSelection(TextSelection.create(tr.doc, at + 1)).scrollIntoView();
     }
   }
-  view.dispatch(tr);
+  if (!inserting) {
+    view.dispatch(tr);
+  } else {
+    // Its own undo step: history would otherwise merge it with typing done just before or after.
+    view.dispatch(closeHistory(tr));
+    view.dispatch(closeHistory(view.state.tr));
+  }
   if (failures.length > 0) {
     window.alert(`Couldn't upload ${failures.length === 1 ? "an image" : `${failures.length} images`}: ${failures[0]}`);
   }

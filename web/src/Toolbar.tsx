@@ -74,10 +74,10 @@ export function Toolbar({ editor }: { editor: Editor }) {
       canFont: editor.can().setFontFamily("serif"),
       fontSize: sizeAtSelection(editor),
       canFontSize: editor.can().setFontSize("12pt"),
-      // A highlight with no color (Ctrl+Shift+H, ==text==) shows as the default Yellow.
+      // A highlight with no color (==text==, or a pasted <mark>: null or "") shows as Yellow.
       highlight: (() => {
         const mark = markAt(editor, "highlight");
-        return mark ? ((mark.attrs.color as string | null) ?? DEFAULT_HIGHLIGHT) : null;
+        return mark ? ((mark.attrs.color as string | null) || DEFAULT_HIGHLIGHT) : null;
       })(),
       canHighlight: editor.can().setHighlight({ color: DEFAULT_HIGHLIGHT }),
     }),

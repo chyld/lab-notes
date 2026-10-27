@@ -28,7 +28,8 @@ export function HighlightPicker({ editor, current, disabled }: Props & { disable
         onClick={() => setOpen((o) => !o)}
       >
         <Highlighter size={18} aria-hidden />
-        <span className="highlight-bar" style={current ? { background: current } : undefined} aria-hidden />
+        {/* backgroundColor, not background: a pasted color can't smuggle in a url(). */}
+        <span className="highlight-bar" style={current ? { backgroundColor: current } : undefined} aria-hidden />
       </button>
       {open && buttonRef.current && (
         <HighlightPopover editor={editor} current={current} anchor={buttonRef.current} onClose={close} />

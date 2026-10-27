@@ -1,5 +1,5 @@
 import { getSchema, type ChainedCommands, type Editor, type ResizableNodeView } from "@tiptap/react";
-import type { Mark } from "@tiptap/pm/model";
+import type { Mark, Node as PMNode } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import { FontFamily, FontSize, TextStyle } from "@tiptap/extension-text-style";
 import Highlight from "@tiptap/extension-highlight";
@@ -8,11 +8,20 @@ import { catalogFamilies, loadFont, primaryFamily } from "./fonts.ts";
 import { DEFAULT_HIGHLIGHT } from "./highlights.ts";
 import { ImagePaste } from "./imagePaste.ts";
 
-// Ctrl+Shift+H toggles Yellow explicitly. Tiptap's colorless toggle would merge in the color of the
-// highlight around the cursor (even one just removed with "None").
+// Ctrl+Shift+H toggles Yellow: it removes a Yellow highlight (or a colorless one, which shows as
+// Yellow) and otherwise sets an explicit Yellow. Tiptap's own colorless toggle would merge in the
+// color of the highlight around the cursor, even one just removed with "None".
 const YellowShortcutHighlight = Highlight.extend({
   addKeyboardShortcuts() {
-    return { "Mod-Shift-h": () => this.editor.commands.toggleHighlight({ color: DEFAULT_HIGHLIGHT }) };
+    return {
+      "Mod-Shift-h": () => {
+        const mark = markAt(this.editor, "highlight");
+        const yellow = mark !== undefined && (mark.attrs.color || DEFAULT_HIGHLIGHT) === DEFAULT_HIGHLIGHT;
+        return yellow
+          ? this.editor.commands.unsetHighlight()
+          : this.editor.commands.setHighlight({ color: DEFAULT_HIGHLIGHT });
+      },
+    };
   },
 });
 
@@ -70,16 +79,26 @@ export function isValidContent(content: unknown): boolean {
 }
 
 /**
- * The mark of this type at the start of the selection, or queued for typing at a cursor.
+ * The mark of this type at the start of the selection (its first inline node, so Select All reads
+ * the first text, not the first paragraph), or queued for typing at a cursor.
  * (editor.getAttributes() returns the first mark anywhere in a range, and at a cursor ignores
  * stored marks that were explicitly cleared.)
  */
 export function markAt(editor: Editor, name: string): Mark | undefined {
   const { state } = editor;
   const { selection } = state;
-  const marks = selection.empty
-    ? (state.storedMarks ?? selection.$from.marks())
-    : (state.doc.nodeAt(selection.from)?.marks ?? selection.$from.marks());
+  let marks: readonly Mark[];
+  if (selection.empty) {
+    marks = state.storedMarks ?? selection.$from.marks();
+  } else {
+    let first: PMNode | undefined;
+    state.doc.nodesBetween(selection.from, selection.to, (node) => {
+      if (first) return false;
+      if (node.isInline) first = node;
+      return !node.isInline;
+    });
+    marks = first?.marks ?? selection.$from.marks();
+  }
   return marks.find((mark) => mark.type.name === name);
 }
 
