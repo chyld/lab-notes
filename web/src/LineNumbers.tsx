@@ -13,16 +13,14 @@ export function useLineNumbersSetting(): [boolean, () => void] {
       return false; // storage unavailable: just not remembered
     }
   });
-  const toggle = useCallback(() => {
-    setOn((was) => {
-      try {
-        localStorage.setItem(STORAGE_KEY, was ? "off" : "on");
-      } catch {
-        // not remembered
-      }
-      return !was;
-    });
-  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, on ? "on" : "off");
+    } catch {
+      // not remembered
+    }
+  }, [on]);
+  const toggle = useCallback(() => setOn((was) => !was), []);
   return [on, toggle];
 }
 

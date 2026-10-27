@@ -182,8 +182,16 @@ export function Toolbar({ editor, lineNumbers, onToggleLineNumbers }: Props) {
         <Divider />
         <Tool icon={RemoveFormatting} label="Clear formatting" onClick={clearFormatting} />
         <Divider />
-        {/* A view setting: it never touches the document. */}
-        <Tool icon={Hash} label="Line numbers" onClick={onToggleLineNumbers} active={lineNumbers} />
+        {/* A view setting: it never touches the document. Focus follows the same rule as above. */}
+        <Tool
+          icon={Hash}
+          label="Line numbers"
+          onClick={(fromKeyboard) => {
+            onToggleLineNumbers();
+            if (!fromKeyboard) editor.commands.focus();
+          }}
+          active={lineNumbers}
+        />
       </div>
     </div>
   );
