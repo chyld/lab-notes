@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -48,12 +49,12 @@ test("creates, reads, and updates a note", async () => {
   assert.equal(updated.createdAt, created.createdAt);
 });
 
-test("lists id and title, most recently saved first", async () => {
+test("lists id, title, and tags, most recently saved first", async () => {
   const a = await create("older");
   await new Promise((r) => setTimeout(r, 5));
   const b = await create("newer");
   let list = (await app.inject({ method: "GET", url: "/api/notes" })).json();
-  assert.deepEqual(Object.keys(list[0]).sort(), ["id", "title"]);
+  assert.deepEqual(Object.keys(list[0]).sort(), ["id", "tags", "title"]);
   assert.equal(list[0].id, b.id);
 
   await new Promise((r) => setTimeout(r, 5));
@@ -302,4 +303,68 @@ test("unknown or malformed image ids are JSON 404s", async () => {
     assert.equal(res.statusCode, 404, id);
     assert.deepEqual(res.json(), { error: "Image not found" });
   }
+});
+
+async function createTagged(first: string, tags: unknown) {
+  return app.inject({ method: "POST", url: "/api/notes", payload: { content: doc(first), tags } });
+}
+
+test("saves tags on create and update; absent tags on PUT keep them", async () => {
+  const created = (await createTagged("Tagged", ["homelab", "net2"])).json();
+  assert.deepEqual(created.tags, ["homelab", "net2"]);
+  const untagged = await create("No tags");
+  assert.deepEqual(untagged.tags, []);
+
+  const put = await app.inject({ method: "PUT", url: `/api/notes/${created.id}`, payload: { content: doc("Tagged"), tags: ["zfs"] } });
+  assert.deepEqual(put.json().tags, ["zfs"]);
+  const keep = await app.inject({ method: "PUT", url: `/api/notes/${created.id}`, payload: { content: doc("Tagged v2") } });
+  assert.deepEqual(keep.json().tags, ["zfs"]);
+  const cleared = await app.inject({ method: "PUT", url: `/api/notes/${created.id}`, payload: { content: doc("Tagged v3"), tags: [] } });
+  assert.deepEqual(cleared.json().tags, []);
+
+  const got = (await app.inject({ method: "GET", url: `/api/notes/${untagged.id}` })).json();
+  assert.deepEqual(got.tags, []);
+  const list = (await app.inject({ method: "GET", url: "/api/notes" })).json();
+  assert.deepEqual(list.find((n: { id: string }) => n.id === created.id).tags, []);
+});
+
+test("rejects invalid tags with 400 and writes nothing", async () => {
+  const before = (await app.inject({ method: "GET", url: "/api/notes" })).json().length;
+  const bad = [
+    ["Upper"], ["has space"], ["dash-ed"], [""], ["a".repeat(41)], ["dup", "dup"], "notarray", [1],
+    Array.from({ length: 51 }, (_, i) => `t${i}`),
+  ];
+  for (const tags of bad) {
+    const res = await createTagged("Bad", tags);
+    assert.equal(res.statusCode, 400, JSON.stringify(tags));
+    assert.equal(typeof res.json().error, "string");
+  }
+  assert.equal((await app.inject({ method: "GET", url: "/api/notes" })).json().length, before);
+  const ok = await createTagged("Edge", ["a".repeat(40), "0", ...Array.from({ length: 48 }, (_, i) => `x${i}`)]);
+  assert.equal(ok.statusCode, 201);
+});
+
+test("migrates a database created before tags", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "labnotes-migrate-"));
+  const path = join(dir, "notes.db");
+  const old = new DatabaseSync(path);
+  old.exec(`CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
+  old.prepare("INSERT INTO notes VALUES (?, ?, ?, ?, ?)").run(
+    "old-1", "Old note", JSON.stringify(doc("Old note")), "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z",
+  );
+  old.close();
+  const migrated = buildApp({ dbPath: path });
+  try {
+    const list = (await migrated.inject({ method: "GET", url: "/api/notes" })).json();
+    assert.deepEqual(list, [{ id: "old-1", title: "Old note", tags: [] }]);
+    const put = await migrated.inject({ method: "PUT", url: "/api/notes/old-1", payload: { content: doc("Old note"), tags: ["kept"] } });
+    assert.deepEqual(put.json().tags, ["kept"]);
+  } finally {
+    await migrated.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+  // Opening again (column already there) is a no-op.
+  const again = buildApp({ dbPath: ":memory:" });
+  await again.close();
 });

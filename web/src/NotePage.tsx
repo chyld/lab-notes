@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router";
 import { ApiError, errorMessage, getNote, type Note } from "./api.ts";
 import { isValidContent } from "./editor.ts";
 import { NoteEditor } from "./NoteEditor.tsx";
-import { Sidebar, SidebarProvider, useSidebarState } from "./Sidebar.tsx";
+import { useNotesChanged } from "./Sidebar.tsx";
 import { TopBar } from "./TopBar.tsx";
 
 type Session = { key: string; note: Note | null };
@@ -22,10 +22,8 @@ export function NotePage() {
   // The id this page just got back from POST. Navigating to it is not a new note to load.
   const createdIdRef = useRef<string | null>(null);
   const newSessionsRef = useRef(0);
-  const sidebar = useSidebarState();
-  // Bumped after every save so the sidebar refetches (new notes, new titles, new order).
-  const [listVersion, setListVersion] = useState(0);
-  const handleSaved = useCallback(() => setListVersion((v) => v + 1), []);
+  // After every save the sidebar refetches (new notes, titles, tags, order).
+  const handleSaved = useNotesChanged();
 
   useEffect(() => {
     if (id === createdIdRef.current) return;
@@ -70,32 +68,17 @@ export function NotePage() {
     [navigate],
   );
 
-  // The sidebar sits outside the keyed editor, so switching notes doesn't reload it.
-  return (
-    <SidebarProvider value={sidebar}>
-      <div className="note-layout">
-        <Sidebar currentId={id} refresh={listVersion} />
-        {/* Behind the narrow overlay the page is inert: no tabbing into the editor under it. */}
-        <div className="note-main" inert={sidebar.narrow && sidebar.open}>
-          {renderMain()}
-        </div>
-      </div>
-    </SidebarProvider>
-  );
-
-  function renderMain() {
-    if (state.status === "ready") {
-      return (
-        <NoteEditor
-          key={state.session.key}
-          initialNote={state.session.note}
-          onCreated={handleCreated}
-          onSaved={handleSaved}
-        />
-      );
-    }
-    return <StatusScreen state={state} />;
+  if (state.status === "ready") {
+    return (
+      <NoteEditor
+        key={state.session.key}
+        initialNote={state.session.note}
+        onCreated={handleCreated}
+        onSaved={handleSaved}
+      />
+    );
   }
+  return <StatusScreen state={state} />;
 }
 
 function StatusScreen({ state }: { state: Exclude<State, { status: "ready" }> }) {

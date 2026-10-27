@@ -1,11 +1,12 @@
 import type { JSONContent } from "@tiptap/react";
 
-export type NoteSummary = { id: string; title: string };
+export type NoteSummary = { id: string; title: string; tags: string[] };
 
 export type Note = {
   id: string;
   title: string;
   content: JSONContent;
+  tags: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -52,8 +53,10 @@ const notePath = (id: string) => `/api/notes/${encodeURIComponent(id)}`;
 
 export const listNotes = () => request<NoteSummary[]>("GET", "/api/notes");
 export const getNote = (id: string) => request<Note>("GET", notePath(id));
-export const createNote = (content: JSONContent) => request<Note>("POST", "/api/notes", { content });
-export const updateNote = (id: string, content: JSONContent) => request<Note>("PUT", notePath(id), { content });
+export const createNote = (content: JSONContent, tags: string[]) =>
+  request<Note>("POST", "/api/notes", { content, tags });
+export const updateNote = (id: string, content: JSONContent, tags: string[]) =>
+  request<Note>("PUT", notePath(id), { content, tags });
 
 /** Stores the image's bytes; resolves to its URL (`/api/images/<sha256>`). */
 export const uploadImage = (file: Blob) =>

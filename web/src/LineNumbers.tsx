@@ -96,8 +96,13 @@ export function LineNumbers({ editor }: { editor: Editor }) {
     };
     const dom = editor.view.dom;
     editor.on("transaction", onTransaction);
-    const resize = new ResizeObserver(schedule); // width changes rewrap the text
+    // The editor resizing rewraps the text; anything else in the container resizing (the tag row
+    // wrapping onto a new line) moves it.
+    const resize = new ResizeObserver(schedule);
     resize.observe(dom);
+    for (const sibling of gutterRef.current?.parentElement?.children ?? []) {
+      if (sibling !== gutterRef.current) resize.observe(sibling);
+    }
     document.fonts.addEventListener("loadingdone", schedule); // Google Fonts rewrap it too
     // An image loading (or failing, and showing as broken) moves the lines below it.
     dom.addEventListener("load", schedule, true);

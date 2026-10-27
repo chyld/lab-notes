@@ -13,10 +13,19 @@ export type AppOptions = {
   logger?: boolean;
 };
 
+// Lowercase letters and digits only, unique within the note (see SPEC "Tags").
+const tagsSchema = {
+  type: "array",
+  maxItems: 50,
+  uniqueItems: true,
+  items: { type: "string", minLength: 1, maxLength: 40, pattern: "^[a-z0-9]+$" },
+} as const;
+
 const docBody = {
   type: "object",
   required: ["content"],
   properties: {
+    tags: tagsSchema,
     content: {
       type: "object",
       required: ["type", "content"],
@@ -35,7 +44,7 @@ const idParams = {
   properties: { id: { type: "string" } },
 } as const;
 
-type DocBody = { content: { type: "doc"; content: object[] } };
+type DocBody = { content: { type: "doc"; content: object[] }; tags?: string[] };
 type IdParams = { id: string };
 
 // JSON nesting levels (each Tiptap node level is two: the node and its content array).
@@ -63,6 +72,7 @@ function toNote(row: NoteRow) {
     id: row.id,
     title: row.title,
     content: JSON.parse(row.content) as unknown,
+    tags: JSON.parse(row.tags) as string[],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -108,7 +118,9 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
     return reply.code(404).send({ error: "Not found" });
   });
 
-  app.get("/api/notes", async () => db.listNotes());
+  app.get("/api/notes", async () =>
+    db.listNotes().map((row) => ({ id: row.id, title: row.title, tags: JSON.parse(row.tags) as string[] })),
+  );
 
   app.get<{ Params: IdParams }>("/api/notes/:id", { schema: { params: idParams } }, async (request, reply) => {
     const row = db.getNote(request.params.id);
@@ -125,6 +137,7 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
       content: JSON.stringify(request.body.content),
       created_at: now,
       updated_at: now,
+      tags: JSON.stringify(request.body.tags ?? []),
     };
     db.insertNote(row);
     return reply.code(201).send(toNote(row));
@@ -137,7 +150,8 @@ export function buildApp({ dbPath, staticDir, logger = false }: AppOptions) {
       const { id } = request.params;
       const content = request.body.content;
       if (exceedsMaxDepth(content)) return reply.code(400).send(tooDeep);
-      const updated = db.updateNote(id, extractTitle(content), JSON.stringify(content), new Date().toISOString());
+      const tags = request.body.tags === undefined ? null : JSON.stringify(request.body.tags);
+      const updated = db.updateNote(id, extractTitle(content), JSON.stringify(content), tags, new Date().toISOString());
       if (!updated) return reply.code(404).send({ error: "Note not found" });
       return toNote(db.getNote(id)!);
     },

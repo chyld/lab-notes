@@ -8,7 +8,7 @@ export function TopBar({ children }: { children?: ReactNode }) {
       <div className="editor-bar-start">
         <ShowNotesButton />
         <Link to="/" className="brand-link">
-          ← <img src="/logo.svg" alt="" width={22} height={22} /> Lab Notes
+          <img src="/logo.svg" alt="" width={22} height={22} /> Lab Notes
         </Link>
       </div>
       <div className="editor-actions">{children}</div>
