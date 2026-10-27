@@ -98,11 +98,16 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
   });
 
   async function saveThenLeave() {
+    const wasNew = noteIdRef.current === null;
     let ok = await save({ stay: false });
-    // If a save was already running, it may not have had the latest changes: save those too.
-    if (ok && isDirtyNow()) ok = await save({ stay: false });
-    // Saved: go on. Failed: stay, with the error in the top bar.
-    settle(ok);
+    // Changes can arrive after a save's snapshot (a toolbar save already running, an image upload
+    // landing mid-save): keep saving until nothing is left, a few rounds at most.
+    for (let round = 0; ok && isDirtyNow() && round < 3; round++) ok = await save({ stay: false });
+    const leave = ok && !isDirtyNow();
+    settle(leave); // saved: go on; failed (error in the top bar) or still changing: stay
+    // Staying on a note that was just created without its URL change: make that change now, so
+    // this page and the URL agree on which note it is (and the own-URL exemption stays correct).
+    if (!leave && wasNew && noteIdRef.current && mountedRef.current) onCreated(noteIdRef.current);
   }
 
   // Reloading or closing the tab: the browser's own "Leave site?" prompt.

@@ -935,9 +935,12 @@ to leave it, the app warns first.
     nothing changes.
   - **Don't save** (red text) → proceed: the edits are discarded.
   - **Save** (the gradient button; "Saving…" while in flight) → `save({ stay: false })`; if a save
-    was already running (a toolbar Save just before the click away) that one is awaited, and if
-    changes were made after it started they're saved too. Then proceed if it worked, or stay (the
-    error shows in the top bar) if it didn't. `stay: false` skips the new note → `/notes/<id>` URL
+    was already running (a toolbar Save just before the click away) that one is awaited. Changes
+    that arrive after a save's snapshot (made during a toolbar save, or an image upload landing
+    mid-save) are saved in further rounds (up to 3). Then proceed only if it worked and nothing is
+    unsaved; otherwise stay (a failure shows its error in the top bar). If it stays on a note that
+    was just created by this Save (so its `/notes/<id>` URL change was skipped), it makes that URL
+    change now (`onCreated`), keeping the page, the URL, and the own-URL exemption in agreement. `stay: false` skips the new note → `/notes/<id>` URL
     change, since the page is leaving anyway; the sidebar still refreshes (`onSaved`).
   - While any save runs, all three buttons are disabled and Esc does nothing: the save's outcome
     decides. A save that finishes while the dialog is open and leaves nothing unsaved (e.g. that
@@ -945,7 +948,8 @@ to leave it, the app warns first.
   - Every answer goes through one `settle(go)`: it reads the latest blocker from a ref and answers
     only once per blocked navigation (react-router rejects a second `proceed`/`reset`).
   - Keep editing gets focus explicitly when the dialog opens; after Keep editing or Esc the editor
-    gets focus back.
+    gets focus back. On narrow screens the sidebar overlay's Esc handler stands aside while a modal
+    dialog is open, so Esc reaches the dialog.
 - **Reload or closing the tab** while dirty: a `beforeunload` listener (registered only while
   dirty) calls `preventDefault()`, so the browser shows its own "Leave site?" prompt (browsers
   don't allow custom text there).

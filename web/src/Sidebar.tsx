@@ -205,8 +205,9 @@ export function Sidebar({ currentId, refresh }: Props) {
   useEffect(() => {
     if (!narrow || !open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      // Not while an IME is composing: that Esc cancels the composition.
-      if (event.key !== "Escape" || event.isComposing) return;
+      // Not while an IME is composing (that Esc cancels the composition), and not while a modal
+      // dialog is open (the unsaved-changes dialog gets that Esc).
+      if (event.key !== "Escape" || event.isComposing || document.querySelector("dialog[open]")) return;
       event.preventDefault();
       setOpen(false);
       focusLater("show-notes");
