@@ -36,6 +36,8 @@ export function NoteEditor({ initialNote, onCreated }: Props) {
     extensions,
     content: initialNote?.content ?? "",
     autofocus: initialNote ? false : "end",
+    // No browser spell check (red squiggles) in notes (user request).
+    editorProps: { attributes: { spellcheck: "false" } },
     onCreate: ({ editor }) => loadDocumentFonts(editor),
     onUpdate: ({ editor }) => {
       versionRef.current += 1;

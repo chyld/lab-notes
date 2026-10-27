@@ -314,6 +314,8 @@ deps would destroy and recreate the editor):
   Docs–style page): white, text inset 3rem left/right (1.25rem under 816px wide; the left inset
   grows while [line numbers](#line-numbers) show), and at least as tall as the window below the
   header, so clicking anywhere under the text focuses it.
+- Browser spell check is off in the editor (user request): `editorProps.attributes.spellcheck =
+  "false"` on the contenteditable, so no red squiggles.
 - Paragraphs have no spacing between them (user request): Enter starts the next line directly
   below, the same height as a wrapped line; for space, the user adds a blank line. This includes
   paragraphs inside list items and quotes. Headings, lists, quotes, and code blocks keep their
