@@ -25,12 +25,14 @@ In scope, and nothing else:
 10. **Collapsible sidebar** (added by user request): the notes sidebar can be hidden and shown;
     clicking a note opens it for editing. See [Notes sidebar](#notes-sidebar).
 11. **Tags** (added by user request): each note has tags (lowercase `a-z` and `0-9` only, no
-    spaces), edited in a row above the text and saved with Save; the sidebar shows them and
-    filters by one. See [Tags](#tags).
+    spaces), edited in a row above the text and saved with Save; the sidebar shows them. See
+    [Tags](#tags).
+12. **Search** (added by user request): one search box in the sidebar; words search the full text
+    of every note, `#tag` filters by tag (prefix). See [Search](#search).
 
 Out of scope (the user will decide later): delete, autosave, unsaved-changes warnings, keyboard
-save shortcut, search, folders, sharing, auth, real-time collaboration,
-version history, dates or previews in the sidebar, text color, an image button or file picker,
+save shortcut, folders, sharing, auth, real-time collaboration,
+version history, note previews in the sidebar, text color, an image button or file picker,
 image drag-and-drop from outside the browser, image captions/alignment/cropping/alt text, and
 deleting unused images.
 
@@ -75,7 +77,8 @@ server/
   app.ts                    # buildApp({ dbPath, staticDir? }) -> Fastify instance
   db.ts                     # openDb(path): mkdir, open, PRAGMA, schema, statements
   images.ts                 # image size limit, accepted content types, type detection
-  title.ts                  # extractTitle(doc: unknown) -> string
+  title.ts                  # extractTitle(doc), extractText(doc) (plain text for search)
+  search.ts                 # parseQuery(q), matchesQuery(note, query)
   title.test.ts
   app.test.ts
 web/
@@ -142,14 +145,19 @@ CREATE TABLE IF NOT EXISTS notes (
   content    TEXT NOT NULL,      -- Tiptap JSON (JSON.stringify of the request's content)
   created_at TEXT NOT NULL,      -- ISO 8601 UTC
   updated_at TEXT NOT NULL,      -- ISO 8601 UTC
-  tags       TEXT NOT NULL DEFAULT '[]'  -- JSON array of tag strings, in the order added
+  tags       TEXT NOT NULL DEFAULT '[]', -- JSON array of tag strings, in the order added
+  body       TEXT NOT NULL DEFAULT ''    -- the note's plain text, for search (see Search)
 );
 ```
 
 **Migration:** databases created before tags have no `tags` column. `openDb` checks
 `PRAGMA table_info(notes)` and, if it's missing, runs
 `ALTER TABLE notes ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'`, so existing notes get no tags and
-nothing else changes.
+nothing else changes. Likewise for `body`: if it's missing, `ALTER TABLE notes ADD COLUMN body TEXT
+NOT NULL DEFAULT ''` and every existing note's `body` filled from its parsed `content` with
+`extractText`, all in one transaction (SQLite DDL is transactional: a crash mid-way leaves no
+column, so the next start retries). A row whose `content` won't parse gets `''` instead of
+aborting the upgrade. `updated_at` is not touched.
 
 ```sql
 CREATE TABLE IF NOT EXISTS images (
@@ -164,7 +172,7 @@ Images are stored in the same database file, so `notes.db` stays the whole of th
 
 `openDb(path)` creates the parent directory (`mkdirSync(dirname(path), { recursive: true })`)
 unless `path` is `":memory:"`, opens `DatabaseSync`, runs `PRAGMA journal_mode = WAL;`, creates
-both tables, and runs the tags migration. The DB file is `$DATA_DIR/notes.db` (`DATA_DIR` defaults to `./data`). WAL mode puts
+both tables, and runs the migrations: `tags` first, then `body`. The DB file is `$DATA_DIR/notes.db` (`DATA_DIR` defaults to `./data`). WAL mode puts
 `notes.db-wal` and `notes.db-shm` beside it.
 
 ## Title rule
@@ -192,7 +200,7 @@ All under `/api`, JSON in and out, except image bytes (below). Note POST/PUT req
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| `GET` | `/api/notes` | — | `200` `[{ id, title, tags, updatedAt }]`, most recently saved first (`updated_at DESC, rowid DESC`: saves in the same millisecond list latest-inserted first) |
+| `GET` | `/api/notes?q=` | — | `200` `[{ id, title, tags, updatedAt }]` (only notes matching `q`, if given; see [Search](#search)), most recently saved first (`updated_at DESC, rowid DESC`: saves in the same millisecond list latest-inserted first) |
 | `POST` | `/api/notes` | `{ content: Doc, tags?: string[] }` | `201` `Note` |
 | `GET` | `/api/notes/:id` | — | `200` `Note`, or `404` |
 | `PUT` | `/api/notes/:id` | `{ content: Doc, tags?: string[] }` | `200` `Note`, or `404` |
@@ -201,6 +209,23 @@ All under `/api`, JSON in and out, except image bytes (below). Note POST/PUT req
 
 `Note` = `{ id, title, content, tags, createdAt, updatedAt }` where `content` is the parsed Tiptap
 JSON and `tags` the note's tags in the order added.
+
+**Body:** `POST`/`PUT` also set `body` = `extractText(content)` (`title.ts`): the text of every
+text node in document order, a `\n` after each textblock and for each hard break; images and
+rules add nothing. Like `extractTitle` it walks with an explicit stack and never throws. `body` is
+only for search; no response includes it.
+
+**Search:** `GET /api/notes?q=…` (querystring schema: `q` a string of at most 500 characters,
+else 400). `q` is split on whitespace. A token starting with `#` is a tag prefix: lowercased,
+everything but `a-z0-9` dropped (a bare `#` is ignored); a note matches if one of its tags starts
+with it. Any other token is a word: a note matches if its `body` contains it (the body starts
+with the title line, so titles are searched too; the `Untitled` placeholder is not text and never
+matches), case-insensitively (both sides `toLowerCase()`), anywhere (substring, so `prox` matches
+`Proxmox`; both sides NFC-normalized, so accents typed or pasted either way match). A tag token
+that is empty after cleaning (`#`, `#!!`) is ignored. A note must match every token (AND). A blank `q` (or none) lists every note. Results
+keep the list order (most recently saved first). Word searches read every note's `body`; tag-only searches use the plain list. Matching runs in JavaScript over the rows (`server/search.ts`:
+`parseQuery`, `matchesQuery`), which is plenty fast for a homelab's notes and handles non-ASCII
+case properly (SQLite's `LIKE` only folds ASCII).
 
 **Tags:** `tags` is optional. On `POST`, absent means `[]`; on `PUT`, absent leaves the note's tags
 unchanged (the app always sends them). Schema: an array of at most 50 unique strings
@@ -271,7 +296,7 @@ So `POST /anything` is a JSON 404, never `index.html`, and a missing file such a
 
 ### `api.ts`
 
-Typed helpers: `listNotes()`, `getNote(id)`, `createNote(content, tags)`, `updateNote(id, content, tags)`,
+Typed helpers: `listNotes(q?)` (`?q=` URL-encoded, omitted when blank), `getNote(id)`, `createNote(content, tags)`, `updateNote(id, content, tags)`,
 `uploadImage(file)`. Note POST/PUT send `Content-Type: application/json`; `uploadImage` sends the
 file's bytes with `Content-Type: file.type` and returns the `url`. A non-2xx response throws an `ApiError` carrying
 `status` and the server's `error` message.
@@ -746,8 +771,7 @@ and error states) with a New note button and every note; clicking a note opens i
 - **Header:** the label "Notes" and the hide button, then a full-width "New note" button (`Plus`
   icon + text; a `<Link>`) that navigates to `/notes/new`. If an unsaved new note is already open,
   it stays as it is (same route; the link uses `replace` there, so no duplicate history entry).
-- **Filter bar** (only while filtering): "Tagged" and the active tag as a chip with a × `<button>`
-  (`aria-label="Clear tag filter"`) that clears it and moves focus to New note.
+- **Search box** under New note: see [Search](#search).
 - **Notes:** most recently saved first (`listNotes()`), each an `<li>` with a link
   (`<Link to="/notes/:id">`, full title in `title`) holding two lines: the title (truncated with an
   ellipsis) and, under it in small gray text, when the note was last saved (user request) as a
@@ -756,16 +780,10 @@ and error states) with a New note button and every note; clicking a note opens i
   yesterday, 9:10 AM", "Edited Oct 12, 3:42 PM" (earlier this year), "Edited Oct 12, 2025"
   (older). "Today"/"yesterday" are judged when the list renders (every refetch). Then, if the note
   has tags, a wrapping row of small tag chips under it. Each chip is a `<button>` (`#tag`,
-  `aria-pressed` when it's the active filter, `title="Show notes tagged tag"`); clicking it sets the
-  filter to that tag, clicking the active one clears it. Chips sit beside the link, not inside it
+  `aria-pressed` when the search contains the token `#tag`, `title="Search for #tag"`); clicking it
+  adds `#tag` to the search, or removes it if it's there. Chips sit beside the link, not inside it
   (no interactive content inside a link). The open note's link has `aria-current="page"` and a
   light blue background.
-- **Filtering:** while a tag filter is set, only notes with that tag are listed, plus the open note
-  whether or not it has the tag (so you always see where you are, e.g. a new untagged note you
-  just saved while filtering). The filter is the sidebar's own state (the
-  sidebar never remounts): it survives switching notes, but not a reload. If no note has the tag any more (e.g. it was just
-  removed and saved), the list says "No notes tagged #tag" (`role="status"`), even while the
-  open note is still listed below it, and the × still clears it.
 - **States:** "Loading…" (first load only), "No notes yet", or the error message (first load only;
   a failed refresh keeps the list already shown).
 - **Freshness:** `NoteEditor` gets an `onSaved()` callback, called after every successful save
@@ -797,9 +815,45 @@ and error states) with a New note button and every note; clicking a note opens i
   popovers at 10, with a shadow), makes `.note-main` `inert` while open (no tabbing into the
   editor underneath), and closes on a backdrop click or Esc (a `document` keydown listener while
   the overlay is open, so it works wherever focus is; both return focus to Show notes) or on
-  picking a note or New note. Clicking a tag chip filters and leaves it open.
+  picking a note or New note. Clicking a tag chip (it edits the search) leaves it open.
 
-Out of scope: search, reordering, delete, renaming a tag across notes, filtering by several tags.
+Out of scope: reordering, delete, renaming a tag across notes.
+
+### Search
+
+One search box in the sidebar (user request), under New note: a `type="search"` input with a
+magnifier icon (`aria-hidden`), `aria-label="Search notes"`, placeholder `Search, or #tag`,
+`spellcheck=false`, `autocapitalize=off`, `maxLength=500` (the server's limit).
+
+- **What it matches:** the server does the matching (`GET /api/notes?q=`, see API): plain words
+  search the full text of every note (its body, which includes the title line; substring,
+  case-insensitive), `#tag` tokens
+  match notes with a tag starting with what's typed (`#home` → `homelab`, `home`), and every token
+  must match. So `proxmox #homelab` lists notes tagged `homelab…` that mention proxmox.
+- **Tag chips** in the list toggle their `#tag` token in the box: clicking adds it (keeping what's
+  already typed), clicking again removes it. Tokens are compared as the search reads them, so
+  `#Home` counts as `#home` (pressed, and removed with every duplicate). This replaced the
+  separate tag filter.
+- **Requests:** typing waits 200ms after the last keystroke, then fetches `listNotes(q)`; the
+  sidebar also re-runs the search when the list refreshes (after a save, or switching notes). A
+  superseded request's answer is ignored (effect cleanup), so an older response never overwrites a
+  newer one. Until the first answer for a non-blank box the full list shows; after that, while a
+  search is in flight, the previous results stay. A failed search keeps them but says
+  "Couldn't search: …" (`role="alert"`) until a search succeeds or the box is cleared. Clearing
+  the box shows the full list at once (no debounce).
+- **Showing results:** the sidebar keeps the full list (as before) and the set of matching ids;
+  while the box is non-blank it lists the full list's notes that matched, in the same order, plus
+  the open note whether or not it matched (so you always see where you are, e.g. a new note you
+  just saved while searching). If nothing matched, it says "No notes match" (`role="status"`),
+  even while the open note is listed below it. Blank box → the full list.
+- **Esc** in a non-empty box clears it (handled by the input itself, not left to the browser, and
+  not while an IME is composing); the key stops there, so on narrow screens it doesn't also close
+  the overlay. Esc in an empty box closes the narrow overlay as before.
+- The search is the sidebar's own state (the sidebar never remounts): it survives switching
+  notes, but not a reload.
+
+Out of scope: highlighting matches, result snippets, ranking, search syntax beyond words and
+`#tag` (no quotes, OR, or negation).
 
 ### Tags
 
@@ -835,8 +889,8 @@ in the document JSON.
   `ResizeObserver` also watches the tag row, so when it wraps onto another line (moving the text
   down without resizing the editor) the numbers follow.
 - **Look:** chips are small rounded pills (`#e9eef6` background, `#444746` text, 13px); the × is a
-  small icon button. The sidebar's chips use the same style at 12px; the active filter chip is
-  light blue (`#d3e3fd`, `#0b57d0`).
+  small icon button. The sidebar's chips use the same style at 12px; a chip whose `#tag` is in
+  the search is light blue (`#d3e3fd`, `#0b57d0`).
 - `tags.ts` holds the rule for the UI: `normalizeTag(text)` (lowercase, strip disallowed
   characters, cut to 40), `MAX_TAG_LENGTH = 40`, and `MAX_TAGS = 50`. The server validates
   independently (see API; `coerceTypes: false`, so `tags: "foo"` is a 400, not `["foo"]`).
@@ -954,6 +1008,11 @@ they never touch `./data`.
     picking a note.
 16. Tags: typing in the tag row accepts only `a-z0-9` (uppercase lowercased, others dropped);
     Enter/Space/comma/blur adds a tag, × removes one, both enable Save; Save persists them and the
-    sidebar shows them; clicking a tag chip in the sidebar filters to notes with that tag and
-    clicking it (or the filter's ×) again clears it; the API rejects invalid tags with 400; an
+    sidebar shows them; clicking a tag chip in the sidebar adds `#tag` to the search and
+    clicking it again removes it; the API rejects invalid tags with 400; an
     existing database gains the `tags` column with every note untagged.
+17. Search: typing words in the sidebar's search box lists the notes whose text contains every
+    word (case-insensitive substring), plus the open note even if it doesn't match; `#tag` narrows to notes with a tag starting with it;
+    both combine; blank shows everything; "No notes match" when nothing does; existing notes are
+    searchable right after the upgrade (`body` backfilled); `npm test` covers parsing, matching,
+    the 500-character limit, and the backfill.
