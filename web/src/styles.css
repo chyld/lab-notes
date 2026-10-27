@@ -1041,3 +1041,89 @@ button.tag-chip:hover {
     padding-left: 3rem;
   }
 }
+
+/* "Unsaved changes" dialog */
+
+.unsaved-dialog {
+  width: min(420px, calc(100vw - 2rem));
+  padding: 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--ink);
+}
+
+.unsaved-dialog::backdrop {
+  background: rgb(22 22 40 / 35%);
+  backdrop-filter: blur(3px);
+}
+
+.unsaved-dialog h2 {
+  margin: 0 0 0.5rem;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.unsaved-dialog p {
+  margin: 0 0 1.25rem;
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.unsaved-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.button-primary,
+.button-quiet,
+.button-danger {
+  padding: 0.5rem 1rem;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: filter 0.12s ease, background-color 0.12s ease;
+}
+
+.button-primary {
+  background: var(--gradient-strong);
+  box-shadow: 0 4px 12px rgb(124 58 237 / 25%);
+  color: #fff;
+}
+
+.button-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.button-primary:disabled {
+  opacity: 0.6;
+}
+
+.button-quiet {
+  color: var(--ink-2);
+}
+
+.button-quiet:hover {
+  background: var(--hover);
+}
+
+.button-danger {
+  color: var(--danger);
+}
+
+.button-danger:hover {
+  background: #fdecef;
+}
+
+.button-primary:focus-visible,
+.button-quiet:focus-visible,
+.button-danger:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
