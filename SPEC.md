@@ -367,8 +367,8 @@ mark, so they are saved in the note's JSON, apply to the selection (or, at a col
 text typed next), and are removed by Clear formatting.
 
 **Catalog.** `web/src/google-fonts.json` is a committed list of every Google Fonts family as
-`[family, category]`, sorted by popularity (~1,950 entries; categories: Sans Serif, Serif,
-Display, Handwriting, Monospace). `npm run fonts:update` regenerates it from
+`[family, category]`, sorted by popularity (~1,740 entries: Google's ~1,950 families minus brand
+fonts; categories: Sans Serif, Serif, Display, Handwriting, Monospace). `npm run fonts:update` regenerates it from
 `https://fonts.google.com/metadata/fonts` (no API key; it can't be fetched at runtime because it
 sends no CORS header). The app imports it lazily (`import()`) the first time the picker opens, so
 it isn't in the main bundle.
@@ -398,7 +398,7 @@ unreachable. The UI shows the first family in the stack without quotes.
 **Font picker** (`FontPicker.tsx`), in the toolbar after the text-style select:
 
 - A button showing the font at the selection or `Default`, ~140px wide with an ellipsis,
-  `aria-haspopup="listbox"`, `aria-expanded`. "At the selection" is `textStyleAt(editor)`
+  `aria-haspopup="dialog"`, `aria-expanded`. "At the selection" is `textStyleAt(editor)`
   (`editor.ts`): at a cursor, the stored marks if set (even an empty set, e.g. after Clear
   formatting) else the marks at the cursor; for a range, the marks of the node at its start.
   (`editor.getAttributes("textStyle")` returns the first textStyle anywhere in a range and ignores
@@ -417,11 +417,15 @@ unreachable. The UI shows the first family in the stack without quotes.
 - The search box is a `role="combobox"` with `aria-controls` the listbox and
   `aria-activedescendant` the highlighted option (each option has a stable id). On open the
   highlight is the current font; a search highlights its first match.
-- Keyboard: ↑/↓ move the highlight (scrolled into view), Enter applies it (ignored while an IME is
-  composing, and a no-op when the search matches nothing), Esc closes and returns focus to the
-  editor. Clicking a row applies it. Rows and category chips cancel `mousedown`, so focus stays in
-  the search box. Clicking outside the popover, resizing the window, or scrolling anything outside
-  the popover (the toolbar scrolls sideways) closes it.
+- Keyboard (in the search box): ↑/↓ move the highlight (scrolled into view; hovering moves it
+  too but doesn't scroll), Enter applies it (ignored while an IME is composing, while the catalog
+  is still loading, and when the search matches nothing). Esc anywhere in the popover closes it and
+  returns focus to the editor; Enter on a category chip just toggles the chip. Clicking a row
+  applies it. Rows and chips cancel `mousedown`, so focus stays in the search box. Clicking outside
+  the popover, focus leaving it (e.g. Tab past the list), resizing the window, or an element outside
+  it scrolling (the toolbar scrolls sideways; page scrolls are ignored since the header is sticky)
+  closes it. If the catalog chunk fails to load, the popover says so and the next open retries.
+- Rows are memoized, so moving the highlight re-renders two rows, not ~1,700.
 - Applying runs `loadFont(family)` and `editor.chain().focus().setFontFamily(stack).run()`, then
   closes. The editor keeps its selection while the popover has focus, so the font lands on the
   text that was selected.
@@ -436,10 +440,12 @@ small number input, a `+` button. Units are points (`pt`).
   HTML) fall back to the computed size. The shown number is rounded for display only.
 - The input (`type="text"`, `inputmode="numeric"`) keeps what the user types as a draft (in a ref,
   since blur can fire in the same tick as Enter/Escape). Only a typed draft is applied: Enter
-  applies `setFontSize("<n>pt")` and returns focus to the editor; leaving the input applies it
-  without refocusing; Esc discards it. Merely focusing and leaving the input changes nothing.
-  `−`/`+` apply the shown size −1 / +1 and follow the toolbar button focus rules; they're
-  disabled at 1 and 400. Sizes are whole numbers clamped to 1–400; non-numeric input reverts.
+  applies `setFontSize("<n>pt")` and returns focus to the editor (Enter refocuses the editor even
+  with nothing typed); leaving the input applies it without refocusing; Esc discards it. Merely
+  focusing and leaving the input changes nothing. `−`/`+` step from a pending typed size if there
+  is one (they cancel `mousedown`, so the input doesn't blur first), otherwise from the shown size,
+  and follow the toolbar button focus rules; they're disabled at 1 and 400. Only plain whole
+  numbers are accepted (`^\d+$`, so `1e3` or `0x10` revert), clamped to 1–400.
 - Labels: `aria-label="Decrease font size"`, `"Font size"`, `"Increase font size"`.
 
 **Privacy.** Because fonts are linked from Google (the user's choice over self-hosting), a browser
