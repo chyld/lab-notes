@@ -34,15 +34,17 @@ type ToolProps = {
   disabled?: boolean;
   /** Extra class for styling one button (e.g. the Save icon). */
   className?: string;
+  /** A tooltip other than the label (the label stays the accessible name). */
+  title?: string;
 };
 
-export function Tool({ icon: Icon, label, keys, onClick, active, disabled, className }: ToolProps) {
+export function Tool({ icon: Icon, label, keys, onClick, active, disabled, className, title }: ToolProps) {
   return (
     <button
       type="button"
       className={className ? `tool ${className}` : "tool"}
       aria-label={label}
-      title={keys ? `${label} (${shortcutLabel(keys)})` : label}
+      title={title ?? (keys ? `${label} (${shortcutLabel(keys)})` : label)}
       aria-keyshortcuts={keys ? ariaShortcut(keys) : undefined}
       aria-pressed={active}
       disabled={disabled}

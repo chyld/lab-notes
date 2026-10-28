@@ -957,7 +957,8 @@ tries again). Every note opens in the formatted view; switching notes leaves the
   source">` holding `docToMarkdown(editor.getJSON())`: monospace (`ui-monospace, "SF Mono",
   Menlo, Consolas, monospace`), 14px (16px in the compact layout, so iOS doesn't zoom), line
   height 1.6, the editor's padding, `spellcheck=false`, no autocapitalize or autocorrect, soft
-  wrapping. It grows with its text (height set from `scrollHeight` on every input), so the page
+  wrapping. It grows with its text (height reset to `auto`, then set from `scrollHeight`, on every
+  input and window resize, so it shrinks too), so the page
   scrolls as with the editor and the sticky header and bottom toolbar behave the same. It gets
   focus, caret at the start.
 - The tag row stays above it and works as usual. Line numbers are hidden (they measure the
@@ -1021,7 +1022,7 @@ joined with `\n` (no trailing newline); reading turns `\r\n` into `\n` and split
 | blocks inside quotes and items | any block (headings, lists, quotes, code, images, rules) nests: a quote's children are written with this table's rules and every resulting line prefixed `> `; an item's later children likewise, every line indented. Reading strips the prefix or indent and reads the lines with the same rules, recursively (so `> ` then an indent then a marker is a list item in a quote, and `  ![a](b)` under an item is an image in it). An empty paragraph in an item is its indent alone: invisible and natural, but if something strips that trailing whitespace the list splits in two around an empty paragraph (nothing is lost). |
 | code block | a fence of backticks + language, the code as is, the fence (longer than any run of backticks inside) |
 | horizontal rule | `---` |
-| image | `![alt](src)` on its own line; with a size (or a title), `<img src="…" alt="…" width="…" height="…">` |
+| image | `![alt](src)` on its own line when that reads back as the same image (one line, same `src` and `alt`); otherwise, or with a size or a title, `<img src="…" alt="…" width="…" height="…">` |
 | bold, italic, strike, code, links | `**…**`, `*…*`, `~~…~~`, `` `…` ``, `[text](href)` |
 | underline | `<u>…</u>` |
 | highlight | `<mark>…</mark>`, with a color `<mark data-color="#ffe967">…</mark>` |
@@ -1035,7 +1036,8 @@ joined with `\n` (no trailing newline); reading turns `\r\n` into `\n` and split
   paragraph's leading whitespace's first character into `&#32;`/`&#9;` (so an indented line after
   a list isn't read as part of it, and leading spaces survive). Attribute values are written in
   double quotes with `&`, `"`, `<`, `>` as entities, except a value with `"` but no `'`, which is
-  written in single quotes as is (so a font stack reads `style='font-family: "Lobster", cursive'`).
+  written in single quotes as is (so a font stack reads `style='font-family: "Lobster", cursive'`);
+  a newline in a value is `&#10;` either way (it would split the line).
 - **Writing:** text is escaped so it reads back as itself: a backslash before Markdown
   punctuation that would otherwise mean something (`\`, `*`, `_`, backtick, `[`, `]`, `<`, `~`),
   and before a line start that would read as a block (`#`, `-`, `+`, `*`, `>`, `1.`, `---`, a
@@ -1044,8 +1046,9 @@ joined with `\n` (no trailing newline); reading turns `\r\n` into `\n` and split
   than any inside, padded with a space when the code starts or ends with a backtick or a space
   (the read-back check falls back to `<code>` for anything still ambiguous). Marks that continue across neighboring pieces of
   text stay open (`**bold *and italic***`, not `**bold ****and italic**`), opened and closed in one
-  fixed order (link, font/size, highlight, underline, bold, italic, strike, code). Link hrefs and
-  image sources get spaces and parentheses percent-encoded. Attributes the text doesn't carry
+  fixed order (link, font/size, highlight, underline, bold, italic, strike, code). Link and image
+  destinations with spaces, parentheses, or angle brackets are written in `<…>` (the URL stays
+  exactly the same). Attributes the text doesn't carry
   (a link's `target`, `rel`, `class`) come back as the editor's defaults when the text is applied.
 - **Every line checks itself:** after writing a line's inline content, `markdown.ts` reads it back;
   if that isn't exactly the same content (same text, same marks, comparing links by href,

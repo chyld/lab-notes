@@ -865,6 +865,47 @@ button:disabled {
   border: 0;
 }
 
+/* Markdown source view (MarkdownSource.tsx): the note as text, where the editor was. */
+
+.page[hidden] {
+  display: none;
+}
+
+.markdown-source {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  padding: 1rem 3rem 2rem; /* the editor's */
+}
+
+.markdown-text {
+  width: 100%;
+  min-height: 60vh;
+  padding: 0;
+  overflow: hidden; /* it grows with its text instead: the page scrolls */
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--ink);
+  caret-color: var(--accent);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}
+
+.markdown-note {
+  margin: 0 0 0.75rem;
+  font-size: 13px;
+}
+
+.markdown-note.error {
+  margin: 0.75rem 0 0;
+}
+
 /* Line numbers: a gutter in the left margin, 1rem left of the text. */
 
 .with-line-numbers .page .ProseMirror {
@@ -1393,6 +1434,14 @@ button.tag-chip:hover {
   .page .ProseMirror {
     padding-right: max(1.25rem, env(safe-area-inset-right));
     padding-left: max(1.25rem, env(safe-area-inset-left));
+  }
+
+  .markdown-source {
+    padding: 1rem max(1.25rem, env(safe-area-inset-right)) 1.5rem max(1.25rem, env(safe-area-inset-left));
+  }
+
+  .markdown-text {
+    font-size: 16px; /* under 16px, iOS zooms in on focus */
   }
 
   .tag-row {

@@ -2,6 +2,7 @@ import { useEditorState, type Editor } from "@tiptap/react";
 import {
   Bold,
   Code,
+  FileCode,
   Hash,
   Italic,
   Link as LinkIcon,
@@ -23,6 +24,7 @@ import { HighlightPicker } from "./HighlightPicker.tsx";
 import { markAt, textStyleAt } from "./editor.ts";
 import { primaryFamily } from "./fonts.ts";
 import { DEFAULT_HIGHLIGHT } from "./highlights.ts";
+import { uploadsPending } from "./imagePaste.ts";
 import { keepFocus } from "./popover.ts";
 import { Divider, Tool } from "./ToolButton.tsx";
 
@@ -52,9 +54,21 @@ type Props = {
   onSave: () => void;
   lineNumbers: boolean;
   onToggleLineNumbers: () => void;
+  /** The Markdown source view is showing: every tool that edits the formatted note is off. */
+  source: boolean;
+  onToggleSource: () => void;
 };
 
-export function Toolbar({ editor, canSave, saving, onSave, lineNumbers, onToggleLineNumbers }: Props) {
+export function Toolbar({
+  editor,
+  canSave,
+  saving,
+  onSave,
+  lineNumbers,
+  onToggleLineNumbers,
+  source,
+  onToggleSource,
+}: Props) {
   const state = useEditorState({
     editor,
     selector: ({ editor }) => ({
@@ -93,6 +107,8 @@ export function Toolbar({ editor, canSave, saving, onSave, lineNumbers, onToggle
         return mark ? ((mark.attrs.color as string | null) || DEFAULT_HIGHLIGHT) : null;
       })(),
       canHighlight: editor.can().setHighlight({ color: DEFAULT_HIGHLIGHT }),
+      // The source view's text wouldn't know about an image that lands while it's open.
+      uploading: uploadsPending(editor),
     }),
   });
 
@@ -153,13 +169,14 @@ export function Toolbar({ editor, canSave, saving, onSave, lineNumbers, onToggle
           className="tool-save toolbar-save"
         />
         <Divider />
-        <Tool icon={Undo2} label="Undo" keys="Mod+Z" onClick={(k) => chain(k).undo().run()} disabled={!state.canUndo} />
-        <Tool icon={Redo2} label="Redo" keys="Mod+Shift+Z" onClick={(k) => chain(k).redo().run()} disabled={!state.canRedo} />
+        <Tool icon={Undo2} label="Undo" keys="Mod+Z" onClick={(k) => chain(k).undo().run()} disabled={source || !state.canUndo} />
+        <Tool icon={Redo2} label="Redo" keys="Mod+Shift+Z" onClick={(k) => chain(k).redo().run()} disabled={source || !state.canRedo} />
         <Divider />
         <select
           className="tool-select"
           aria-label="Text style"
           title="Text style"
+          disabled={source}
           value={state.codeBlock ? "code" : state.headingLevel ? String(state.headingLevel) : "p"}
           onChange={(event) => setBlockStyle(event.target.value)}
         >
@@ -175,33 +192,33 @@ export function Toolbar({ editor, canSave, saving, onSave, lineNumbers, onToggle
           ))}
         </select>
         <Divider />
-        <FontPicker editor={editor} current={state.fontFamily} disabled={!state.canFont} />
+        <FontPicker editor={editor} current={state.fontFamily} disabled={source || !state.canFont} />
         <Divider />
-        <FontSizeControl editor={editor} size={state.fontSize} disabled={!state.canFontSize} />
+        <FontSizeControl editor={editor} size={state.fontSize} disabled={source || !state.canFontSize} />
         <Divider />
-        <Tool icon={Bold} label="Bold" keys="Mod+B" onClick={(k) => chain(k).toggleBold().run()} active={state.bold} disabled={!state.canBold} />
-        <Tool icon={Italic} label="Italic" keys="Mod+I" onClick={(k) => chain(k).toggleItalic().run()} active={state.italic} disabled={!state.canItalic} />
-        <Tool icon={Underline} label="Underline" keys="Mod+U" onClick={(k) => chain(k).toggleUnderline().run()} active={state.underline} disabled={!state.canUnderline} />
-        <Tool icon={Strikethrough} label="Strikethrough" keys="Mod+Shift+S" onClick={(k) => chain(k).toggleStrike().run()} active={state.strike} disabled={!state.canStrike} />
-        <Tool icon={Code} label="Inline code" keys="Mod+E" onClick={(k) => chain(k).toggleCode().run()} active={state.code} disabled={!state.canCode} />
-        <HighlightPicker editor={editor} current={state.highlight} disabled={!state.canHighlight} />
+        <Tool icon={Bold} label="Bold" keys="Mod+B" onClick={(k) => chain(k).toggleBold().run()} active={state.bold} disabled={source || !state.canBold} />
+        <Tool icon={Italic} label="Italic" keys="Mod+I" onClick={(k) => chain(k).toggleItalic().run()} active={state.italic} disabled={source || !state.canItalic} />
+        <Tool icon={Underline} label="Underline" keys="Mod+U" onClick={(k) => chain(k).toggleUnderline().run()} active={state.underline} disabled={source || !state.canUnderline} />
+        <Tool icon={Strikethrough} label="Strikethrough" keys="Mod+Shift+S" onClick={(k) => chain(k).toggleStrike().run()} active={state.strike} disabled={source || !state.canStrike} />
+        <Tool icon={Code} label="Inline code" keys="Mod+E" onClick={(k) => chain(k).toggleCode().run()} active={state.code} disabled={source || !state.canCode} />
+        <HighlightPicker editor={editor} current={state.highlight} disabled={source || !state.canHighlight} />
         <Divider />
         <Tool
           icon={LinkIcon}
           label="Link"
           onClick={editLink}
           active={state.link}
-          disabled={!state.link && (state.selectionEmpty || !state.canLink)}
+          disabled={source || (!state.link && (state.selectionEmpty || !state.canLink))}
         />
         <Divider />
-        <Tool icon={List} label="Bulleted list" keys="Mod+Shift+8" onClick={(k) => chain(k).toggleBulletList().run()} active={state.bulletList} disabled={!state.canBulletList} />
-        <Tool icon={ListOrdered} label="Numbered list" keys="Mod+Shift+7" onClick={(k) => chain(k).toggleOrderedList().run()} active={state.orderedList} disabled={!state.canOrderedList} />
+        <Tool icon={List} label="Bulleted list" keys="Mod+Shift+8" onClick={(k) => chain(k).toggleBulletList().run()} active={state.bulletList} disabled={source || !state.canBulletList} />
+        <Tool icon={ListOrdered} label="Numbered list" keys="Mod+Shift+7" onClick={(k) => chain(k).toggleOrderedList().run()} active={state.orderedList} disabled={source || !state.canOrderedList} />
         <Divider />
-        <Tool icon={Quote} label="Quote" keys="Mod+Shift+B" onClick={(k) => chain(k).toggleBlockquote().run()} active={state.blockquote} disabled={!state.canBlockquote} />
-        <Tool icon={SquareCode} label="Code block" keys="Mod+Alt+C" onClick={(k) => chain(k).toggleCodeBlock().run()} active={state.codeBlock} disabled={!state.canCodeBlock} />
-        <Tool icon={Minus} label="Horizontal line" onClick={(k) => chain(k).setHorizontalRule().run()} disabled={!state.canHorizontalRule} />
+        <Tool icon={Quote} label="Quote" keys="Mod+Shift+B" onClick={(k) => chain(k).toggleBlockquote().run()} active={state.blockquote} disabled={source || !state.canBlockquote} />
+        <Tool icon={SquareCode} label="Code block" keys="Mod+Alt+C" onClick={(k) => chain(k).toggleCodeBlock().run()} active={state.codeBlock} disabled={source || !state.canCodeBlock} />
+        <Tool icon={Minus} label="Horizontal line" onClick={(k) => chain(k).setHorizontalRule().run()} disabled={source || !state.canHorizontalRule} />
         <Divider />
-        <Tool icon={RemoveFormatting} label="Clear formatting" onClick={clearFormatting} />
+        <Tool icon={RemoveFormatting} label="Clear formatting" onClick={clearFormatting} disabled={source} />
         <Divider />
         {/* A view setting: it never touches the document. Focus follows the same rule as above. */}
         <Tool
@@ -211,7 +228,17 @@ export function Toolbar({ editor, canSave, saving, onSave, lineNumbers, onToggle
             onToggleLineNumbers();
             if (!fromKeyboard) editor.commands.focus();
           }}
-          active={lineNumbers}
+          active={lineNumbers && !source}
+          disabled={source}
+        />
+        {/* The note as Markdown text (user request: "a raw mode, where I can see and edit"). */}
+        <Tool
+          icon={FileCode}
+          label="Markdown source"
+          title={source ? "Back to the formatted view" : "Edit as Markdown"}
+          onClick={onToggleSource}
+          active={source}
+          disabled={!source && state.uploading}
         />
       </div>
     </div>

@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useBlocker } from "react-router";
 import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
+import { closeHistory } from "@tiptap/pm/history";
+import type { Selection } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 import { Save } from "lucide-react";
 import { createNote, errorMessage, updateNote, type Note } from "./api.ts";
-import { extensions, liveTitle, loadDocumentFonts } from "./editor.ts";
+import { extensions, isValidContent, liveTitle, loadDocumentFonts } from "./editor.ts";
+import { MarkdownSource } from "./MarkdownSource.tsx";
 import { LineNumbers, useLineNumbersSetting } from "./LineNumbers.tsx";
 import { useCompact } from "./media.ts";
 import { TagEditor } from "./TagEditor.tsx";
@@ -31,6 +34,19 @@ function scrollCaretBetweenBars(view: EditorView): boolean {
   else if (caret.bottom > bottom - gap) window.scrollBy(0, caret.bottom - (bottom - gap));
   return true;
 }
+
+type MarkdownModule = typeof import("./markdown.ts");
+
+/** The page's scroll position as a share of how far it can scroll (kept across view switches). */
+const scrollShare = () => {
+  const range = document.documentElement.scrollHeight - window.innerHeight;
+  return range > 0 ? window.scrollY / range : 0;
+};
+const restoreScroll = (share: number) =>
+  requestAnimationFrame(() => {
+    const range = document.documentElement.scrollHeight - window.innerHeight;
+    window.scrollTo(0, Math.max(0, share * range));
+  });
 
 type Props = {
   initialNote: Note | null;
@@ -60,6 +76,17 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
   // A tag typed but not yet added. It counts as unsaved and Save adds it, so it's never lost.
   const [tagDraft, setTagDraft] = useState("");
   const tagDraftRef = useRef("");
+  // The Markdown source view (see SPEC "Markdown source"): the text, or null in the formatted view.
+  const [source, setSourceState] = useState<string | null>(null);
+  const sourceRef = useRef<string | null>(null);
+  // The text as last generated or applied: text still equal to it is never applied (no round trip
+  // touches a note nobody changed).
+  const appliedRef = useRef("");
+  const [sourceLossy, setSourceLossy] = useState(false);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const markdownRef = useRef<MarkdownModule | null>(null);
+  const selectionRef = useRef<Selection | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -172,13 +199,91 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
     setTagDraft(draft);
   }
 
+  function setSource(text: string | null) {
+    sourceRef.current = text;
+    setSourceState(text);
+  }
+
+  /** Typing in the source view: an edit like any other (the document isn't touched until applied). */
+  function changeSource(text: string) {
+    setSource(text);
+    setSourceError(null);
+    versionRef.current += 1;
+    setVersion(versionRef.current);
+  }
+
+  /**
+   * Turns the source view's text into the note, if it changed; false if it can't (the view stays,
+   * with an error, and nothing is saved).
+   */
+  function applySource(editor: Editor): boolean {
+    const text = sourceRef.current;
+    const markdown = markdownRef.current;
+    if (text === null || markdown === null || text === appliedRef.current) return true;
+    const json = markdown.markdownToDoc(text);
+    if (!isValidContent(json)) {
+      setSourceError("Couldn't read this Markdown");
+      return false;
+    }
+    const doc = editor.schema.nodeFromJSON(json);
+    if (!doc.eq(editor.state.doc)) {
+      // Its own undo step (not merged with typing just before or after), and plain URLs in it stay
+      // plain (the link plugin would otherwise link them).
+      const { view } = editor;
+      const tr = view.state.tr.replaceWith(0, view.state.doc.content.size, doc.content);
+      view.dispatch(closeHistory(tr.setMeta("preventAutolink", true)));
+      view.dispatch(closeHistory(view.state.tr));
+    }
+    appliedRef.current = text;
+    setSourceError(null);
+    return true;
+  }
+
+  async function toggleSource() {
+    if (!editor) return;
+    const share = scrollShare();
+    if (sourceRef.current !== null) {
+      const changed = sourceRef.current !== appliedRef.current;
+      if (!applySource(editor)) return;
+      setSource(null);
+      setSourceError(null);
+      restoreScroll(share);
+      // Back to typing: where it was if nothing was applied, otherwise at the start.
+      const selection = selectionRef.current;
+      if (!changed && selection && selection.to <= editor.state.doc.content.size) {
+        editor.chain().setTextSelection({ from: selection.from, to: selection.to }).focus(undefined, { scrollIntoView: false }).run();
+      } else {
+        editor.commands.focus("start", { scrollIntoView: false });
+      }
+      return;
+    }
+    try {
+      markdownRef.current ??= await import("./markdown.ts");
+    } catch {
+      setError("Couldn't load the Markdown view.");
+      return;
+    }
+    const markdown = markdownRef.current;
+    const text = markdown.docToMarkdown(editor.getJSON());
+    // Can the text hold this note exactly? If not, say so (toggling back unedited still changes nothing).
+    setSourceLossy(!editor.schema.nodeFromJSON(markdown.markdownToDoc(text)).eq(editor.state.doc));
+    selectionRef.current = editor.state.selection;
+    appliedRef.current = text;
+    setError(null);
+    setSourceError(null);
+    setSource(text);
+    restoreScroll(share);
+  }
+
   /**
    * Saves the note; resolves to whether it worked. While a save is in flight, returns that one.
    * `stay` false (saving on the way out of the note) skips the new note → /notes/<id> URL change,
-   * since the page is about to leave anyway.
+   * since the page is about to leave anyway. In the source view, its text is applied first (before
+   * anything else, so no path saves without it); if it can't be, nothing is saved.
    */
   function save(options: { stay?: boolean } = {}): Promise<boolean> {
     if (!editor) return Promise.resolve(false);
+    if (!applySource(editor)) return Promise.resolve(false);
     if (inFlightRef.current) return inFlightRef.current;
     const promise = runSave(editor, options).finally(() => {
       inFlightRef.current = null;
@@ -245,10 +350,12 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
             onSave={() => void save()}
             lineNumbers={lineNumbers}
             onToggleLineNumbers={toggleLineNumbers}
+            source={source !== null}
+            onToggleSource={() => void toggleSource()}
           />
         )}
       </div>
-      <main className={lineNumbers ? "page-wrap with-line-numbers" : "page-wrap"}>
+      <main className={lineNumbers && source === null ? "page-wrap with-line-numbers" : "page-wrap"}>
         <TagEditor
           tags={tags}
           draft={tagDraft}
@@ -256,8 +363,18 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
           onAdd={addTag}
           onRemove={(tag) => changeTags(tagsRef.current.filter((t) => t !== tag))}
         />
-        <EditorContent editor={editor} className="page" />
-        {editor && lineNumbers && <LineNumbers editor={editor} />}
+        {/* Hidden, not unmounted, in the source view: the editor and its history stay. */}
+        <EditorContent editor={editor} className="page" hidden={source !== null} />
+        {source !== null && (
+          <MarkdownSource
+            text={source}
+            onChange={changeSource}
+            lossy={sourceLossy}
+            error={sourceError}
+            textareaRef={textareaRef}
+          />
+        )}
+        {editor && lineNumbers && source === null && <LineNumbers editor={editor} />}
       </main>
       {blocker.state === "blocked" && (
         <UnsavedDialog
@@ -265,7 +382,9 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
           saving={saving}
           onCancel={() => {
             settle(false);
-            editor?.commands.focus(); // back to typing where they were
+            // Back to typing where they were, in whichever view is showing.
+            if (sourceRef.current !== null) textareaRef.current?.focus();
+            else editor?.commands.focus();
           }}
           onDiscard={() => settle(true)}
           onSave={() => void saveThenLeave()}

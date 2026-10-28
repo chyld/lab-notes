@@ -1,4 +1,4 @@
-import { Extension } from "@tiptap/react";
+import { Extension, type Editor } from "@tiptap/react";
 import { closeHistory } from "@tiptap/pm/history";
 import type { Fragment, NodeType, Slice } from "@tiptap/pm/model";
 import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from "@tiptap/pm/state";
@@ -102,6 +102,9 @@ function insertUploaded(view: EditorView, id: object, results: PromiseSettledRes
 function pastePending(state: EditorState): Pending[] {
   return key.getState(state) ?? [];
 }
+
+/** Images still uploading (they'll land in the document when they finish). */
+export const uploadsPending = (editor: Editor) => pastePending(editor.state).length > 0;
 
 /** Paste images: upload them, showing "Uploading image…" where they'll go, then insert them. */
 export const ImagePaste = Extension.create({
