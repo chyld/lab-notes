@@ -7,6 +7,7 @@ import type { EditorView } from "@tiptap/pm/view";
 import { Save } from "lucide-react";
 import { createNote, errorMessage, updateNote, type Note } from "./api.ts";
 import { extensions, isValidContent, liveTitle, loadDocumentFonts } from "./editor.ts";
+import { uploadsPending } from "./imagePaste.ts";
 import { MarkdownSource } from "./MarkdownSource.tsx";
 import { LineNumbers, useLineNumbersSetting } from "./LineNumbers.tsx";
 import { useCompact } from "./media.ts";
@@ -220,8 +221,13 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
     const text = sourceRef.current;
     const markdown = markdownRef.current;
     if (text === null || markdown === null || text === appliedRef.current) return true;
-    const json = markdown.markdownToDoc(text);
-    if (!isValidContent(json)) {
+    let json;
+    try {
+      json = markdown.markdownToDoc(text);
+    } catch {
+      json = null; // e.g. nesting too deep for the stack
+    }
+    if (!json || !isValidContent(json)) {
       setSourceError("Couldn't read this Markdown");
       return false;
     }
@@ -236,11 +242,22 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
     }
     appliedRef.current = text;
     setSourceError(null);
+    setSourceLossy(false); // the note is now exactly what this text says
     return true;
   }
 
+  const togglingRef = useRef(false);
   async function toggleSource() {
-    if (!editor) return;
+    if (!editor || togglingRef.current) return; // a second click while the view loads
+    togglingRef.current = true;
+    try {
+      await switchView(editor);
+    } finally {
+      togglingRef.current = false;
+    }
+  }
+
+  async function switchView(editor: Editor) {
     const share = scrollShare();
     if (sourceRef.current !== null) {
       const changed = sourceRef.current !== appliedRef.current;
@@ -263,10 +280,22 @@ export function NoteEditor({ initialNote, onCreated, onSaved }: Props) {
       setError("Couldn't load the Markdown view.");
       return;
     }
+    // An image pasted while that loaded would land in the formatted note, which the text wouldn't
+    // know about: don't open now (the button is off until it lands).
+    if (uploadsPending(editor)) return;
     const markdown = markdownRef.current;
-    const text = markdown.docToMarkdown(editor.getJSON());
-    // Can the text hold this note exactly? If not, say so (toggling back unedited still changes nothing).
-    setSourceLossy(!editor.schema.nodeFromJSON(markdown.markdownToDoc(text)).eq(editor.state.doc));
+    let text: string;
+    let lossy: boolean;
+    try {
+      text = markdown.docToMarkdown(editor.getJSON());
+      // Can the text hold this note exactly? If not, say so (toggling back unedited still changes
+      // nothing).
+      lossy = !editor.schema.nodeFromJSON(markdown.markdownToDoc(text)).eq(editor.state.doc);
+    } catch {
+      setError("Couldn't show this note as Markdown.");
+      return;
+    }
+    setSourceLossy(lossy);
     selectionRef.current = editor.state.selection;
     appliedRef.current = text;
     setError(null);

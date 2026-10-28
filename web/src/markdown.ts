@@ -74,11 +74,12 @@ const sameInline = (a: JSONContent[] | undefined, b: JSONContent[] | undefined) 
   );
 };
 
-// URLs a link or image may point to: anything else stays text.
-const SAFE_HREF = /^(?:https?:|mailto:|tel:|#|\/(?!\/))/i;
+// URLs a link or image may point to: anything else stays text. Links: the schemes the editor's own
+// link extension allows (so any link made in the editor survives), a path, or a #fragment.
+const SAFE_HREF = /^(?:(?:https?|ftps?|mailto|tel|callto|sms|cid|xmpp):|#|\/(?!\/))/i;
 const SAFE_SRC = /^(?:https?:|\/(?!\/))/i;
 // Attribute values that can only be the formatting itself (a `;` would smuggle in more CSS).
-const SAFE_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+const SAFE_COLOR = /^(?:#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})|(?:rgb|hsl)a?\([\d\s.,%/]+\)|[a-z]+)$/i;
 const SAFE_FONT_FAMILY = /^[A-Za-z0-9 ,"'-]+$/;
 const SAFE_FONT_SIZE = /^\d+(?:\.\d+)?(?:pt|px|em|rem|%)$/;
 
@@ -99,7 +100,8 @@ function escapeText(text: string): string {
   return text
     .replace(ENTITY_LIKE, "&amp;")
     .replace(/[\\`*_[\]<>~]/g, (char) => `\\${char}`)
-    .replace(/\n/g, "&#10;");
+    .replace(/\n/g, "&#10;")
+    .replace(/\r/g, "&#13;");
 }
 
 /** A line start that would read as a block construct gets escaped. */
@@ -211,8 +213,10 @@ function writeInline(nodes: JSONContent[] | undefined, mode: Mode): string {
     } else if (mode === "markdown") {
       out += codeSpan(node.text);
     } else {
-      // Read back literally (see readInline), so only what HTML itself needs is escaped.
-      const literal = node.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "&#10;");
+      // Read back literally (see readInline); but marked still lexes what's inside first, so
+      // anything it could take as syntax (a `\` before the `</code>`, a backtick, `*`…) is a
+      // numeric entity, which only decodes.
+      const literal = node.text.replace(/[\\`*_[\]~!()<>&"'\n\r]/g, (char) => `&#${char.charCodeAt(0)};`);
       out += `<code>${literal}</code>`;
     }
   }
@@ -226,10 +230,21 @@ function writeInline(nodes: JSONContent[] | undefined, mode: Mode): string {
  */
 function inlineLine(nodes: JSONContent[] | undefined, lineStart: boolean): string {
   const prefix = (text: string) => (lineStart ? escapeLineStart(text) : text);
+  // A paragraph's line is also read as a block (it could start a fence, say), so check it that
+  // way: it must come back as one paragraph with this content.
+  const readsBack = (line: string) => {
+    if (!lineStart) return sameInline(readInline(line), nodes);
+    const blocks = readBlocks([line]);
+    return blocks.length === 1 && blocks[0].type === "paragraph" && sameInline(blocks[0].content, nodes);
+  };
   const markdown = prefix(writeInline(nodes, "markdown"));
-  if (sameInline(readInline(markdown), nodes)) return markdown;
+  if (readsBack(markdown)) return markdown;
   return prefix(writeInline(nodes, "html"));
 }
+
+/** Leading whitespace as an entity, where the reader would otherwise drop it (after `# `). */
+const keepLeadingSpace = (text: string) =>
+  /^[ \t]/.test(text) ? (text[0] === "\t" ? "&#9;" : "&#32;") + text.slice(1) : text;
 
 /** The lines of a list of blocks. `previous` tells adjacent lists and quotes apart. */
 function writeBlocks(nodes: JSONContent[] | undefined): string[] {
@@ -253,7 +268,7 @@ function writeBlock(node: JSONContent, afterSameType: boolean, alternate: boolea
       return [node.content?.length ? inlineLine(node.content, true) : ""];
     case "heading": {
       const level = Math.min(6, Math.max(1, Number(node.attrs?.level) || 1));
-      return [`${"#".repeat(level)} ${inlineLine(node.content, false)}`];
+      return [`${"#".repeat(level)} ${keepLeadingSpace(inlineLine(node.content, false))}`];
     }
     case "codeBlock": {
       const code = (node.content ?? []).map((child) => child.text ?? "").join("");
@@ -476,7 +491,7 @@ const paragraph = (src: string): JSONContent => {
 };
 
 const BULLET = /^([-*+])(?: (.*))?$/;
-const ORDERED = /^(\d{1,9})([.)])(?: (.*))?$/;
+const ORDERED = /^(\d{1,15})([.)])(?: (.*))?$/;
 const FENCE = /^(`{3,})(.*)$/;
 
 /** An image alone on its line, as `![alt](src)` or `<img …>`; null if it isn't one. */
@@ -507,8 +522,12 @@ function imageLine(line: string): JSONContent | null {
   return { type: "image", attrs };
 }
 
+/** Quotes and items nest at most this deep; deeper lines are read as plain paragraphs. */
+const MAX_DEPTH = 100;
+
 /** Blocks from lines (the top level, or a quote's or item's lines with their prefix removed). */
-function readBlocks(lines: string[]): JSONContent[] {
+function readBlocks(lines: string[], depth = 0): JSONContent[] {
+  if (depth > MAX_DEPTH) return lines.map(paragraph);
   const blocks: JSONContent[] = [];
   let i = 0;
   while (i < lines.length) {
@@ -549,7 +568,7 @@ function readBlocks(lines: string[]): JSONContent[] {
     if (line.startsWith(">")) {
       const inner: string[] = [];
       while (i < lines.length && lines[i].startsWith(">")) inner.push(lines[i++].replace(/^> ?/, ""));
-      const content = readBlocks(inner);
+      const content = readBlocks(inner, depth + 1);
       blocks.push({ type: "blockquote", content: content.length ? content : [{ type: "paragraph" }] });
       continue;
     }
@@ -588,7 +607,7 @@ function readBlocks(lines: string[]): JSONContent[] {
           const opened = FENCE.exec(body);
           if (opened) fenceClose = new RegExp(`^\`{${opened[1].length},}\\s*$`);
         }
-        items.push({ type: "listItem", content: [paragraph(first), ...readBlocks(own)] });
+        items.push({ type: "listItem", content: [paragraph(first), ...readBlocks(own, depth + 1)] });
       }
       blocks.push(
         bullet

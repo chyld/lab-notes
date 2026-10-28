@@ -1031,9 +1031,10 @@ joined with `\n` (no trailing newline); reading turns `\r\n` into `\n` and split
 
 - **Entities:** reading decodes exactly `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#39;`, and numeric
   `&#NN;`/`&#xHH;`, in text and in attribute values (`marked` leaves them as they are); anything
-  else stays as typed. Writing turns an `&` that would decode into `&amp;`, a newline inside a
-  text node (pasted text can carry one) into `&#10;` so it can't split the paragraph, and a
-  paragraph's leading whitespace's first character into `&#32;`/`&#9;` (so an indented line after
+  else stays as typed. Writing turns an `&` that would decode into `&amp;`, a newline or carriage
+  return inside a text node (pasted text can carry one) into `&#10;`/`&#13;` so it can't split the
+  paragraph, and a paragraph's (or heading's, after the `#`s) leading whitespace's first character
+  into `&#32;`/`&#9;` (so an indented line after
   a list isn't read as part of it, and leading spaces survive). Attribute values are written in
   double quotes with `&`, `"`, `<`, `>` as entities, except a value with `"` but no `'`, which is
   written in single quotes as is (so a font stack reads `style='font-family: "Lobster", cursive'`);
@@ -1050,8 +1051,9 @@ joined with `\n` (no trailing newline); reading turns `\r\n` into `\n` and split
   destinations with spaces, parentheses, or angle brackets are written in `<…>` (the URL stays
   exactly the same). Attributes the text doesn't carry
   (a link's `target`, `rel`, `class`) come back as the editor's defaults when the text is applied.
-- **Every line checks itself:** after writing a line's inline content, `markdown.ts` reads it back;
-  if that isn't exactly the same content (same text, same marks, comparing links by href,
+- **Every line checks itself:** after writing a line's inline content, `markdown.ts` reads it back
+  (a paragraph's line as a block too, since it could start a fence or a list: it must come back as
+  one paragraph); if that isn't exactly the same content (same text, same marks, comparing links by href,
   highlights by color, fonts and sizes by value), the line is written with HTML tags instead
   (`<strong>`, `<em>`, `<s>`, `<code>`, `<a href>`, plus the ones above), which always read back
   exactly. So odd cases (bold that starts or ends with a space, emphasis against punctuation)
@@ -1070,20 +1072,29 @@ joined with `\n` (no trailing newline); reading turns `\r\n` into `\n` and split
   `font-family`/`font-size` in `style` (others are ignored; `width`/`height` become whole numbers
   or nothing); any other tag stays as literal text. Values are checked, so nothing but the
   formatting itself gets in (a `;` in a style would otherwise smuggle in more CSS, like a
-  `url(…)` that loads something): `data-color` must be `#` and 3 or 6 hex digits;
+  `url(…)` that loads something): `data-color` must be `#` and 3, 4, 6, or 8 hex digits,
+  `rgb(…)`/`rgba(…)`/`hsl(…)`/`hsla(…)` with only numbers, spaces, commas, dots, `%`, and `/`
+  inside, or a color name;
   `font-family` only letters, digits, spaces, commas, hyphens, and quotes; `font-size` a number
   with `pt`, `px`, `em`, `rem`, or `%`; a value that fails is ignored (the text keeps the other
   formatting). The tag grammar is exact: a lowercase name
   from that list, attributes as `name="…"` or `name='…'`, optional `/` before `>`; anything else
   (comments, `</div>`, uppercase, unquoted values) is text. Inside `<code>…</code>` the tokens'
   raw text is taken literally (entities decoded, nothing else), since `marked` would otherwise
-  read `**a**` or `\*` in there as Markdown; the writer escapes only `&`, `<`, `>` in it. A link or autolink token whose raw text isn't
+  read `**a**` or `\*` in there as Markdown; the writer turns every character `marked` could
+  take as syntax there (`` \ ` * _ [ ] ~ ! ( ) < > & " ' `` and line breaks) into a numeric
+  entity, so nothing inside can end the `</code>` early. A link or autolink token whose raw text isn't
   `[…](…)` or `<…>` (a bare URL or email the tokenizer still linked) is turned back into text. A
-  link's title (`[t](/u "title")`) is dropped. Links keep only `http:`, `https:`, `mailto:`, `tel:`, `/…`, and `#…`
-  hrefs (anything else, `javascript:` included, leaves the text unlinked); images only `http:`,
+  link's title (`[t](/u "title")`) is dropped. Links keep only the schemes the editor's own link extension
+  allows (`http`, `https`, `ftp`, `ftps`, `mailto`, `tel`, `callto`, `sms`, `cid`, `xmpp`; so a
+  link made in the editor always survives), `/…`, and `#…` hrefs (anything else, `javascript:`
+  included, leaves the text unlinked); images only `http:`,
   `https:`, and `/…` sources (anything else stays text). An image is recognized only alone on its
   line (images are blocks); mid-line it's literal text. Leading spaces of a top-level line are
-  kept as text.
+  kept as text. Quotes and items nest at most 100 deep; deeper lines are read as plain
+  paragraphs (so pasting thousands of `> ` can't overflow the stack). If converting ever throws
+  anyway, applying shows "Couldn't read this Markdown" and opening the view says "Couldn't show
+  this note as Markdown." in the top bar, staying formatted.
 - `markdown.ts` imports nothing from the DOM or React (only `marked` and Tiptap's JSON type), and
   is loaded with a dynamic `import()` the first time the toggle is used, so the editor's own load
   doesn't grow. `package.json` gets `marked` (^18).

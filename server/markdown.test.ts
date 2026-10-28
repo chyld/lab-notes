@@ -167,6 +167,25 @@ test("unsafe or unknown things stay text", () => {
   assert.deepEqual(read("see <https://example.com>"), normalize(doc(p(t("see "), t("https://example.com", link("https://example.com"))))));
 });
 
+test("review cases: code spans at a line start, literal code, heading spaces, \\r, long numbers", () => {
+  // A code span of 3+ backticks at a line start would read as a fence and swallow what follows.
+  roundTrip(doc(p(t("a``b", "code")), p(t("next line"))));
+  roundTrip(doc(p(t("````", "code"), t(" tail")), p(t("after"))));
+  roundTrip(doc(ul(li(p(t("x")), p(t("a``b", "code")))), p(t("after"))));
+  // Literal <code> (the HTML fallback) can't be ended early by what's inside it.
+  roundTrip(doc(p(t("a ", "underline"), t("b"), t("end\\", "code"), t(" tail"))));
+  roundTrip(doc(p(t("x ", "bold"), t("`a` *b* _c_ [d] ~e~ (f)", "code"), t(" z"))));
+  // Leading whitespace in a heading; whitespace-only heading.
+  roundTrip(doc(h(2, t(" spaced")), h(3, t("  "))));
+  // A carriage return inside text; a list numbered from a big number.
+  roundTrip(doc(p(t("a\rb"))));
+  roundTrip(doc(ol(12345678901, li(p(t("big"))))));
+  // Links the editor itself allows survive; nesting deeper than 100 is read as paragraphs, not a crash.
+  roundTrip(doc(p(t("files", link("ftp://example.com/a")), t(" "), t("chat", link("xmpp:me@example.com")))));
+  assert.doesNotThrow(() => markdownToDoc("> ".repeat(5000) + "deep"));
+  roundTrip(doc(p(t("pasted", highlight("rgb(255, 233, 103)")))));
+});
+
 test("entities: the ones written are read back; others stay as typed", () => {
   const read = (text: string) => normalize(markdownToDoc(text));
   assert.deepEqual(read("a &amp; b &lt;c&gt; &quot;d&quot; &#38; &copy;"), normalize(doc(p(t('a & b <c> "d" & &copy;')))));
