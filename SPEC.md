@@ -40,6 +40,9 @@ In scope, and nothing else:
 16. **Multiple users** (added by user request): each person signs in with a username and password
     and has their own private notes, tags, and favorite fonts; accounts are created and managed
     from the command line. See [Accounts and sign-in](#accounts-and-sign-in).
+17. **Markdown source** (added by user request): a toolbar toggle shows the open note as
+    Markdown text to read and edit directly, then back to the formatted view. See
+    [Markdown source](#markdown-source).
 
 Out of scope (the user will decide later): delete, autosave, keyboard
 save shortcut, folders, sharing (between users too), account screens in the app (sign-up,
@@ -122,6 +125,8 @@ web/
     highlights.ts           # the 8 highlight colors
     imagePaste.ts           # paste-to-upload plugin with an "Uploading image…" placeholder
     LineNumbers.tsx         # line-number gutter: measures visual lines, renders the numbers
+    markdown.ts             # note ⇄ Markdown text (docToMarkdown, markdownToDoc); loaded on demand
+    MarkdownSource.tsx      # the Markdown source view (a growing textarea)
     Sidebar.tsx             # collapsible notes sidebar + its open/closed state (context)
     TagEditor.tsx           # the note's tag row (chips + add-tag input)
     tags.ts                 # tag rule shared by the UI: normalizeTag(), MAX_TAGS
@@ -619,7 +624,7 @@ Behavior:
   Enter.
   Icons (lucide-react): `Undo2`, `Redo2`, `Bold`, `Italic`, `Underline`, `Strikethrough`, `Code`,
   `Link` (imported as `LinkIcon`), `List`, `ListOrdered`, `Quote`, `SquareCode`, `Minus`,
-  `RemoveFormatting`, `Highlighter`, `Hash` (line numbers), `Save`.
+  `RemoveFormatting`, `Highlighter`, `Hash` (line numbers), `FileCode` (Markdown source), `Save`.
 - **Look:** Google Docs–like. Icon buttons (lucide icons, 18px) in a light gray rounded bar.
   Hover is a slightly darker gray; pressed is light blue (`#d3e3fd`) with a blue icon
   (`#0b57d0`); disabled is faded. When it doesn't fit, the row scrolls horizontally rather than
@@ -930,6 +935,167 @@ supplies:
 **Privacy (images).** Pasted image files are stored on the server and never leave the homelab. Hotlinked
 images in pasted HTML are the exception: they load from their original site whenever the note is
 opened, which tells that site the viewer's IP address.
+
+### Markdown source
+
+By user request: "a raw mode, where I can see and edit". The user chose a note's source as
+**Markdown**. A toolbar toggle swaps the formatted editor for the note as Markdown text in a plain
+text box; toggling again turns the text back into the formatted note.
+
+**The toggle:** the last toolbar button, after Line numbers (lucide `FileCode`, `aria-label`
+"Markdown source", `aria-pressed` while on, `title` "Edit as Markdown" / "Back to the formatted
+view"). Disabled until the editor exists, and while an image is still uploading (the upload lands in the formatted document,
+which the text wouldn't know about): `imagePaste.ts` exports `uploadsPending(editor)`, which reads
+its plugin state, and the toolbar's `useEditorState` selector includes it, so the button follows
+every upload. The first use loads `markdown.ts` (dynamic `import()`); if that fails, the view
+stays formatted and the top bar's error says "Couldn't load the Markdown view." (the next click
+tries again). Every note opens in the formatted view; switching notes leaves the mode.
+
+**While it's on** (`MarkdownSource.tsx`):
+
+- The formatted editor stays mounted but hidden; in its place a `<textarea aria-label="Markdown
+  source">` holding `docToMarkdown(editor.getJSON())`: monospace (`ui-monospace, "SF Mono",
+  Menlo, Consolas, monospace`), 14px (16px in the compact layout, so iOS doesn't zoom), line
+  height 1.6, the editor's padding, `spellcheck=false`, no autocapitalize or autocorrect, soft
+  wrapping. It grows with its text (height set from `scrollHeight` on every input), so the page
+  scrolls as with the editor and the sticky header and bottom toolbar behave the same. It gets
+  focus, caret at the start.
+- The tag row stays above it and works as usual. Line numbers are hidden (they measure the
+  editor), the page drops its `with-line-numbers` gutter padding, and the line-number button is
+  disabled.
+- **Heads-up:** when it opens, `markdown.ts` reads its own text back (`markdownToDoc`) and compares
+  with the document (`editor.schema.nodeFromJSON(…).eq(editor.state.doc)`); if they differ (a
+  structure or attribute the dialect can't hold exactly: a link's `title`/`target`/`rel`/`class`
+  other than the editor's defaults, an ordered list's `type` such as Roman numerals, both only
+  possible from pasted HTML), a muted line above the text says "Some of this
+  note's formatting can't be shown as Markdown; editing here may change it." Toggling back
+  without editing still changes nothing.
+- Switching views keeps the scroll position in proportion (`scrollY / scrollHeight`), so a long
+  note opens near the same place.
+- Every formatting tool (undo/redo, text style, font, size, marks, highlight, link, lists, quote,
+  code block, rule, clear formatting) is disabled: they act on the formatted editor. The text box
+  has its own undo (Ctrl+Z). Save and the toggle stay.
+- Typing makes the note dirty like any edit (Save lights up, leaving asks first): the
+  textarea's `input` bumps the same version counter, without touching the document. Pasting an
+  image file into it does nothing (image paste is the formatted view's). Its height is measured
+  after it's shown (a hidden element measures 0).
+- The breadcrumb title stays the formatted document's until the text is applied (below).
+
+**Applying the text** (`markdownToDoc`), when toggling back, when saving, or when the unsaved
+dialog's Save runs (`save()` does it first thing, before checking for a save already in flight,
+so no path saves without it; a save already running finishes with the old document and the note
+stays dirty for the next): if the text is exactly what it was when last generated or applied, nothing
+happens: the document is never touched by a round trip that changed nothing. Otherwise the text
+is parsed and checked with `isValidContent`; if the result equals the current document
+(`nodeFromJSON(…).eq(…)`: e.g. `**x**` retyped as `<strong>x</strong>`), nothing is set and that
+text just becomes the "last applied"; otherwise `setContent(json)`, as its own undo step:
+the history is closed before and after it (`closeHistory`, as image insertion does), so one
+Ctrl+Z neither takes typing from just before with it nor merges with typing after; and with
+`preventAutolink` set on its transaction, so Tiptap's link plugin doesn't turn plain URLs in the
+applied text into links. Ctrl+Z in the formatted view brings back the document from before.
+That text becomes the new "last applied". (`markdownToDoc` always produces a valid document, so the check
+is a seatbelt: if it ever fails, the view stays on the text with "Couldn't read this Markdown"
+under it, `role="alert"`, and nothing is applied or saved: `save()` resolves `false` without
+saving, so the unsaved dialog's Save stays (`settle(false)`) instead of saving the old document
+and leaving, and the text box keeps focus.) The unsaved dialog's Keep editing (and Esc) focuses
+whichever view is showing: the text box in the source view. Saving in the source view applies first, before the save takes its
+snapshot (`runSave` applies, then reads the version and `getJSON()`, so the apply's own update
+counts as saved), and stays in it; the text box isn't rewritten. Toggling back applies, then
+focuses the editor: with the selection it had before the source view if nothing was applied,
+otherwise at the start.
+
+**The dialect** (`markdown.ts`): standard Markdown for formatting, but **one line per paragraph**,
+because that's how the editor works: Enter starts a new paragraph with no gap, and the user adds
+an empty paragraph for space. So each paragraph is one line, an empty paragraph is an empty line,
+and two lines in a row are two paragraphs (in standard Markdown they'd join into one). Blocks are
+joined with `\n` (no trailing newline); reading turns `\r\n` into `\n` and splits on `\n`, so
+`[p("a"), p("")]` is `a\n` and reads back the same, and an empty text is one empty paragraph.
+
+| In the note | In the text |
+|---|---|
+| paragraph | its text on one line; empty → an empty line |
+| heading 1–6 | `# ` … `###### ` |
+| bulleted list | `- ` items; numbered list `1. `, `2. ` … (from the list's start); a list right after another of the same kind uses the other marker (`*`, `)`) so they stay two lists |
+| an item's later paragraphs, nested lists, code | indented by that item's marker's width (2 for `- `, 3 for `1. `, 4 for `10. `), empty lines included (an empty paragraph or empty code line in an item is the indent alone) |
+| quote | each line prefixed `> ` (an empty one `>`); two quotes in a row are separated by a `<!---->` line |
+| blocks inside quotes and items | any block (headings, lists, quotes, code, images, rules) nests: a quote's children are written with this table's rules and every resulting line prefixed `> `; an item's later children likewise, every line indented. Reading strips the prefix or indent and reads the lines with the same rules, recursively (so `> ` then an indent then a marker is a list item in a quote, and `  ![a](b)` under an item is an image in it). An empty paragraph in an item is its indent alone: invisible and natural, but if something strips that trailing whitespace the list splits in two around an empty paragraph (nothing is lost). |
+| code block | a fence of backticks + language, the code as is, the fence (longer than any run of backticks inside) |
+| horizontal rule | `---` |
+| image | `![alt](src)` on its own line; with a size (or a title), `<img src="…" alt="…" width="…" height="…">` |
+| bold, italic, strike, code, links | `**…**`, `*…*`, `~~…~~`, `` `…` ``, `[text](href)` |
+| underline | `<u>…</u>` |
+| highlight | `<mark>…</mark>`, with a color `<mark data-color="#ffe967">…</mark>` |
+| font, size | `<span style='font-family: "Lobster", cursive; font-size: 14pt'>…</span>` (either or both) |
+| line break (Shift+Enter) | `<br>` |
+
+- **Entities:** reading decodes exactly `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#39;`, and numeric
+  `&#NN;`/`&#xHH;`, in text and in attribute values (`marked` leaves them as they are); anything
+  else stays as typed. Writing turns an `&` that would decode into `&amp;`, a newline inside a
+  text node (pasted text can carry one) into `&#10;` so it can't split the paragraph, and a
+  paragraph's leading whitespace's first character into `&#32;`/`&#9;` (so an indented line after
+  a list isn't read as part of it, and leading spaces survive). Attribute values are written in
+  double quotes with `&`, `"`, `<`, `>` as entities, except a value with `"` but no `'`, which is
+  written in single quotes as is (so a font stack reads `style='font-family: "Lobster", cursive'`).
+- **Writing:** text is escaped so it reads back as itself: a backslash before Markdown
+  punctuation that would otherwise mean something (`\`, `*`, `_`, backtick, `[`, `]`, `<`, `~`),
+  and before a line start that would read as a block (`#`, `-`, `+`, `*`, `>`, `1.`, `---`, a
+  fence, `<!---->`, `<img`, `![`). Text inside the HTML fallback tags is escaped the same way
+  (it's still read as Markdown), and `<`, `>`, `&` in it as entities. Inside code spans nothing is escaped: the span's backtick run is one longer
+  than any inside, padded with a space when the code starts or ends with a backtick or a space
+  (the read-back check falls back to `<code>` for anything still ambiguous). Marks that continue across neighboring pieces of
+  text stay open (`**bold *and italic***`, not `**bold ****and italic**`), opened and closed in one
+  fixed order (link, font/size, highlight, underline, bold, italic, strike, code). Link hrefs and
+  image sources get spaces and parentheses percent-encoded. Attributes the text doesn't carry
+  (a link's `target`, `rel`, `class`) come back as the editor's defaults when the text is applied.
+- **Every line checks itself:** after writing a line's inline content, `markdown.ts` reads it back;
+  if that isn't exactly the same content (same text, same marks, comparing links by href,
+  highlights by color, fonts and sizes by value), the line is written with HTML tags instead
+  (`<strong>`, `<em>`, `<s>`, `<code>`, `<a href>`, plus the ones above), which always read back
+  exactly. So odd cases (bold that starts or ends with a space, emphasis against punctuation)
+  cost readability on that one line, never content.
+- **Reading:** the blocks are read line by line by `markdown.ts` itself (the rules above): a
+  list item's lines are those indented by at least its marker's width (whitespace-only lines with
+  that indent included); a fence inside an item or quote runs to its closing fence at the same
+  indent, its lines losing only that indent; a change of bullet character or number delimiter
+  starts a new list; a `<!---->` line separates and adds nothing. Inline content goes through
+  `marked`'s `Lexer.lexInline(text, { gfm: true, tokenizer })` with a `new Tokenizer()` whose
+  `url` returns `undefined` (GFM on, so `~~strike~~` works, but bare URLs, `www.` hosts, and
+  emails aren't autolinked, since a plain URL in a note isn't a link; an explicit `<https://…>` is
+  a link). The tokenizer is local to `markdown.ts` (never `marked.use`, which is global). Only the HTML tags in the table (and
+  `strong`/`b`, `em`/`i`, `s`/`del`, `code`, `a href`, `br`, `img`) are understood, and of their
+  attributes only `href`; `src`, `alt`, `title`, `width`, `height`; `data-color`; and
+  `font-family`/`font-size` in `style` (others are ignored; `width`/`height` become whole numbers
+  or nothing); any other tag stays as literal text. Values are checked, so nothing but the
+  formatting itself gets in (a `;` in a style would otherwise smuggle in more CSS, like a
+  `url(…)` that loads something): `data-color` must be `#` and 3 or 6 hex digits;
+  `font-family` only letters, digits, spaces, commas, hyphens, and quotes; `font-size` a number
+  with `pt`, `px`, `em`, `rem`, or `%`; a value that fails is ignored (the text keeps the other
+  formatting). The tag grammar is exact: a lowercase name
+  from that list, attributes as `name="…"` or `name='…'`, optional `/` before `>`; anything else
+  (comments, `</div>`, uppercase, unquoted values) is text. Inside `<code>…</code>` the tokens'
+  raw text is taken literally (entities decoded, nothing else), since `marked` would otherwise
+  read `**a**` or `\*` in there as Markdown; the writer escapes only `&`, `<`, `>` in it. A link or autolink token whose raw text isn't
+  `[…](…)` or `<…>` (a bare URL or email the tokenizer still linked) is turned back into text. A
+  link's title (`[t](/u "title")`) is dropped. Links keep only `http:`, `https:`, `mailto:`, `tel:`, `/…`, and `#…`
+  hrefs (anything else, `javascript:` included, leaves the text unlinked); images only `http:`,
+  `https:`, and `/…` sources (anything else stays text). An image is recognized only alone on its
+  line (images are blocks); mid-line it's literal text. Leading spaces of a top-level line are
+  kept as text.
+- `markdown.ts` imports nothing from the DOM or React (only `marked` and Tiptap's JSON type), and
+  is loaded with a dynamic `import()` the first time the toggle is used, so the editor's own load
+  doesn't grow. `package.json` gets `marked` (^18).
+
+Tests (`server/markdown.test.ts`, run by `npm test`): every node and mark above round-trips
+(`markdownToDoc(docToMarkdown(doc))` equals `doc`, both normalized through the editor's schema:
+`getSchema(extensions).nodeFromJSON(…).toJSON()`); quotes and items holding headings, lists,
+quotes, code, and images;
+one-line-per-paragraph and empty paragraphs (a trailing one too); nested lists and quotes; a
+`10.` item's continuation; an empty paragraph and an empty code line inside an item; adjacent
+lists and adjacent quotes; a paragraph with leading spaces after a list; a newline inside a text
+node; code fences with backticks inside; code spans with backticks and edge spaces; escaping
+(text full of Markdown punctuation and leading `#`/`-`/`1.`); entities in text and attributes;
+font stacks with quotes; the per-line HTML fallback (bold ending in a space); links and images
+with unsafe URLs stay text; unknown HTML stays text; a bare URL isn't linked.
 
 ### Line numbers
 
@@ -1561,7 +1727,7 @@ write to it (a bind mount would not).
 | `npm run dev:web` | `vite` (proxies `/api` to the server's `PORT`) |
 | `npm run build` | `vite build` |
 | `npm run typecheck` | `tsc -p tsconfig.web.json && tsc -p tsconfig.server.json` |
-| `npm test` | `node --test server/` |
+| `npm test` | `node --test server/` (`server/markdown.test.ts` covers `web/src/markdown.ts`, which has no DOM or React in it) |
 | `npm start` | `node server/index.ts` (serves `dist/web` if present) |
 | `npm run fonts:update` | Regenerates `web/src/google-fonts.json` from Google Fonts metadata |
 
@@ -1645,3 +1811,10 @@ they never touch `./data`.
     all of this, the migration, and `accounts.ts`. The existing tests run signed in: a helper
     creates an account in the app's database (`buildApp` exposes it to tests as `app.db`), signs
     in through the API, and adds the cookie to every request; a second user checks isolation.
+22. Markdown source: the toolbar toggle shows the note as Markdown (one line per paragraph, empty
+    lines kept), editable; toggling back without editing leaves the note exactly as it was;
+    after editing, the note becomes what the text says (one undo step) and is dirty; Save works
+    from either view; leaving with unapplied text asks first, and Save there applies it; fonts,
+    sizes, highlight colors, underline, and image sizes survive a round trip; a `javascript:`
+    link or unknown HTML in the text never becomes a link or markup; `npm test` covers the
+    converter.
